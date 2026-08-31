@@ -10,9 +10,15 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using RustArchon.Api.Data;
+using RustArchon.Api.Hubs;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Authentication;
 using RustArchon.Api.Infrastructure.Security;
+using RustArchon.Api.Messaging;
+using RustArchon.Api.Repositories;
+using RustArchon.Api.Services;
+using RustArchon.Messaging.Contracts;
+using StackExchange.Redis;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -68,20 +74,40 @@ builder.Services.AddDataProtection()
 builder.Services.AddScoped<IRconCredentialProtector, RconCredentialProtector>();
 
 // ============================================
-// 4b. INVITATION-GATED SIGN-UP
+// 4b. PLATFORM SETTINGS (Valkey-cached, Postgres-backed)
 // ============================================
-// Read directly from the flat RUSTARCHON_INVITATION_CODES_ENABLED key - the same name used in .env
-// and docker-compose.yml, no Section:Key rename in between. See InvitationCodeOptions's remarks.
-builder.Services.Configure<InvitationCodeOptions>(options =>
-    options.Enabled = builder.Configuration.GetValue("RUSTARCHON_INVITATION_CODES_ENABLED", true));
+// IConnectionMultiplexer is registered ONLY when a connection string is actually configured -
+// PlatformSettingsCache resolves it lazily via IServiceProvider.GetService (not constructor
+// injection), so an environment that never configures Valkey at all still runs fine, straight against
+// Postgres for every settings read. See PlatformSettingsCache's remarks for the rest of its
+// defense-in-depth against Valkey being unreachable.
+var valkeyConnectionString = builder.Configuration["Valkey:ConnectionString"];
+if (!string.IsNullOrWhiteSpace(valkeyConnectionString))
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+    {
+        var options = ConfigurationOptions.Parse(valkeyConnectionString);
+        // Never let a temporarily-unreachable Valkey block or fail Api startup - see
+        // PlatformSettingsCache's remarks (degradation level 2). The multiplexer keeps retrying the
+        // connection in the background regardless.
+        options.AbortOnConnectFail = false;
+        return ConnectionMultiplexer.Connect(options);
+    });
+}
+
+// IPlatformSettingRepository itself is picked up by AutoDiscoverRepositories below, same as every
+// other repository in this project - no explicit registration needed here.
+//
+// Scoped, not Singleton - it depends on IPlatformSettingRepository, itself scoped to ApiDbContext's
+// own per-request lifetime. IConnectionMultiplexer (genuinely a singleton) is still resolved lazily
+// via IServiceProvider inside PlatformSettingsCache rather than constructor-injected, purely so a
+// deployment that never configures Valkey at all doesn't turn depending on this cache into a DI
+// resolution failure - see its remarks.
+builder.Services.AddScoped<IPlatformSettingsCache, PlatformSettingsCache>();
 
 // ============================================
 // 4c. MESSAGING (RABBITMQ)
 // ============================================
-// Publish-only for now (InternalController's email endpoint is the only publisher) - no consumers
-// registered here yet. The RCON pipeline's own Api-side consumers (RconFrameIngestionConsumer,
-// ServerConnectionHeartbeatConsumer, ...) land in this same AddMassTransit call once that work
-// resumes; ConfigureEndpoints below is a no-op until then.
 // Username/Password come from RABBITMQ_DEFAULT_USER/PASS directly - the RabbitMQ container's own
 // required env var names, not a RustArchon-specific rename. See RabbitMqOptions's remarks.
 var rabbitMqOptions = new RabbitMqOptions
@@ -94,6 +120,15 @@ var rabbitMqOptions = new RabbitMqOptions
 
 builder.Services.AddMassTransit(x =>
 {
+    x.AddConsumer<RconFrameIngestionConsumer>();
+    x.AddConsumer<ConnectionStatusConsumer>();
+    x.AddConsumer<ServerConnectionHeartbeatConsumer>();
+
+    // 10s matches RustArchon.Worker's SendRconCommandConsumer fanout - see RustServersController's
+    // SendCommand action for how a RequestTimeoutException (no instance responded - e.g. no worker
+    // currently owns this server) maps to a 504.
+    x.AddRequestClient<SendRconCommand>(RequestTimeout.After(s: 10));
+
     x.UsingRabbitMq((context, cfg) =>
     {
         cfg.Host(rabbitMqOptions.Host, rabbitMqOptions.VirtualHost, h =>
@@ -102,9 +137,18 @@ builder.Services.AddMassTransit(x =>
             h.Password(rabbitMqOptions.Password);
         });
 
+        // The three AddConsumer<> registrations above are ordinary competing-consumer subscriptions
+        // (the API runs as a single instance, so there's no fanout-vs-competing distinction to make
+        // the way there is on the Worker side for ServerLifecycleChanged/SendRconCommand) -
+        // ConfigureEndpoints' own default per-consumer-type queue naming is exactly right here, no
+        // explicit ReceiveEndpoint needed. SendRconCommand's request client above needs no matching
+        // consumer registration at all - MassTransit manages its temporary reply queue internally.
         cfg.ConfigureEndpoints(context);
     });
 });
+
+builder.Services.AddHostedService<ServerClaimSweepService>();
+builder.Services.AddSignalR();
 
 // ============================================
 // 5. JWT AUTHENTICATION CONFIGURATION
@@ -120,7 +164,7 @@ var jwtSettings = builder.Configuration.GetSection("JwtSettings").Get<JwtSetting
 jwtSettings.SecretKey = builder.Configuration["RUSTARCHON_JWT_SECRET_KEY"]
     ?? throw new InvalidOperationException("RUSTARCHON_JWT_SECRET_KEY configuration is missing.");
 
-// Same flat-key approach as InvitationCodeOptions above - RUSTARCHON_INTERNAL_API_KEY reaches this
+// Same flat-key approach used throughout this file - RUSTARCHON_INTERNAL_API_KEY reaches this
 // property directly, and it's the exact same name RustArchon.Worker and the Blazor web app read too.
 builder.Services.Configure<InternalApiKeyOptions>(options =>
     options.SharedSecret = builder.Configuration["RUSTARCHON_INTERNAL_API_KEY"] ?? string.Empty);
@@ -146,6 +190,34 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.SecretKey)),
             ClockSkew = TimeSpan.Zero // No tolerance for expired tokens
         };
+
+        // Browsers can't set an Authorization header on a WebSocket handshake - SignalR's documented
+        // workaround is accepting the token from the query string instead, scoped to just the hub
+        // path so this doesn't loosen how every other (ordinary HTTP) endpoint accepts a token.
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken) && context.HttpContext.Request.Path.StartsWithSegments("/hubs"))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            },
+            // Without this, every rejected token surfaces only as a bare 401 with no trace of *why* -
+            // expired, bad signature, wrong issuer/audience, and "someone sent garbage" all look
+            // identical from the client side. Logged at Warning (not Error) since a rejected token is
+            // an expected, routine occurrence (a stale ITokenStore entry, a client clock issue), not a
+            // service fault.
+            OnAuthenticationFailed = context =>
+            {
+                context.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>()
+                    .LogWarning(context.Exception, "JWT bearer authentication failed for {Path}", context.HttpContext.Request.Path);
+                return Task.CompletedTask;
+            }
+        };
     })
     // Service-to-service calls (e.g. the Blazor web app's QueuedEmailSender) - a separate scheme from
     // the JWT bearer above, opted into per-endpoint via [Authorize(AuthenticationSchemes = "InternalApiKey")].
@@ -155,22 +227,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 // ============================================
 // 6. AUTHORIZATION
 // ============================================
-// PlatformAdmin is a single admin email read directly from RUSTARCHON_ADMIN_EMAIL, not a JumpStart
-// Permission claim - granting this through a tenant's own Role would mean the normal sign-up
-// bootstrap flow could accidentally hand every new user admin rights over sign-up itself, which is
-// why this is a separate, config-only check instead. Read once here and reused below by
-// AdminInvitationSeeder, rather than each reading the config key independently.
+// Read once here and reused below by AdminInvitationSeeder, rather than each reading the config key
+// independently. RUSTARCHON_ADMIN_EMAIL itself is only ever consulted at account-bootstrap time now
+// (see AccountBootstrapController) - PlatformAdmin below is a real Permission claim, resolved and
+// granted the same way every other authorization check in this app is, not a live string comparison.
 var adminEmail = builder.Configuration["RUSTARCHON_ADMIN_EMAIL"];
 
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("PlatformAdmin", policy =>
-        policy.RequireAssertion(context =>
-        {
-            var email = context.User.Identity?.Name;
-            return !string.IsNullOrEmpty(email) && !string.IsNullOrEmpty(adminEmail)
-                && string.Equals(email, adminEmail, StringComparison.OrdinalIgnoreCase);
-        }));
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageInvitationsPermission));
+    options.AddPolicy("ManagePlatformSettings", policy =>
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageSettingsPermission));
 });
 
 // ============================================
@@ -234,6 +302,17 @@ using (var migrationScope = app.Services.CreateScope())
         adminEmail,
         builder.Configuration["RUSTARCHON_ADMIN_CODE"],
         migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See SiteAdminRoleSeeder's remarks - this is the role AccountBootstrapController grants to a
+    // newly-registered RUSTARCHON_ADMIN_EMAIL account, and what the PlatformAdmin policy above
+    // actually checks for.
+    await SiteAdminRoleSeeder.EnsureRoleAsync(
+        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See PlatformSettingsRegistry's remarks - seeds every known platform setting (currently just
+    // InvitationCodesEnabled) with its default value if the row doesn't exist yet.
+    await PlatformSettingsRegistry.EnsureDefaultsAsync(
+        dbContext, builder.Configuration, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 }
 
 // ============================================
@@ -245,6 +324,36 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(options =>
     {
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "RustArchon API v1");
+    });
+}
+else
+{
+    // Without this, an unhandled exception outside Development previously fell all the way through
+    // to Kestrel's own bare, contentless 500 - no logging, no diagnostic trail, nothing. Registered
+    // first (before UseCorrelate, before everything) so it wraps the whole rest of the pipeline,
+    // including middleware, not just controller actions. Development deliberately skips this in favor
+    // of the framework's own built-in developer exception page (full stack trace), which this generic
+    // handler would otherwise shadow.
+    app.UseExceptionHandler(errorApp =>
+    {
+        errorApp.Run(async context =>
+        {
+            var exception = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+            if (exception is not null)
+            {
+                context.RequestServices.GetRequiredService<ILogger<Program>>()
+                    .LogError(exception, "Unhandled exception processing {Method} {Path}", context.Request.Method, context.Request.Path);
+            }
+
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/problem+json";
+            await context.Response.WriteAsJsonAsync(new
+            {
+                type = "https://tools.ietf.org/html/rfc7231#section-6.6.1",
+                title = "An unexpected error occurred.",
+                status = StatusCodes.Status500InternalServerError
+            });
+        });
     });
 }
 
@@ -266,6 +375,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<RconHub>("/hubs/rcon");
 
 // Fail fast on startup if any AutoMapper profile is misconfigured.
 var mapper = app.Services.GetRequiredService<IMapper>();

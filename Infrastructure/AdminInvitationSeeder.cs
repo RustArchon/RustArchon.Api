@@ -14,10 +14,11 @@ namespace RustArchon.Api.Infrastructure;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <strong>The problem this solves:</strong> with <c>RUSTARCHON_INVITATION_CODES_ENABLED</c>
-/// defaulting to <c>true</c> (see <see cref="InvitationCodeOptions"/>), a brand-new deployment has
-/// zero invitation codes and zero accounts - nobody can register, including the person who's supposed
-/// to become the platform admin, and <see cref="Controllers.InvitationCodesController"/> (which mints
+/// <strong>The problem this solves:</strong> with "Require invitation codes to register" (see
+/// <see cref="PlatformSettingsRegistry.InvitationCodesEnabled"/>) defaulting to <c>true</c>, a
+/// brand-new deployment has zero invitation codes and zero accounts - nobody can register, including
+/// the person who's supposed to become the platform admin, and
+/// <see cref="Controllers.InvitationCodesController"/> (which mints
 /// more codes) itself requires already being signed in as one. There's no way in, self-service or
 /// otherwise, without this.
 /// </para>
@@ -29,8 +30,9 @@ namespace RustArchon.Api.Infrastructure;
 /// code is useless without also controlling that inbox. The operator sets both in <c>.env</c> (see
 /// <c>.env.example</c>), starts the stack, and registers at <c>/Account/Register</c> with that
 /// email/code pair - they end up an Owner of their own tenant (the normal sign-up flow) *and* a
-/// platform admin (their email already satisfies the <c>PlatformAdmin</c> policy in
-/// <c>Program.cs</c>), with no separate "create admin user" code path needed.
+/// platform admin (<see cref="Controllers.AccountBootstrapController"/> grants them the global
+/// "Site Admin" role - see <see cref="SiteAdminRoleSeeder"/> - because their email matches this same
+/// <c>RUSTARCHON_ADMIN_EMAIL</c>), with no separate "create admin user" code path needed.
 /// </para>
 /// <para>
 /// <strong>Idempotent, not a live toggle:</strong> runs on every startup (see <c>Program.cs</c>,

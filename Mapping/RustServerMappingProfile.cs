@@ -41,5 +41,25 @@ public class RustServerMappingProfile
         createMap.ForMember(dest => dest.Tenant, opt => opt.Ignore());
         updateMap.ForMember(dest => dest.TenantId, opt => opt.Ignore());
         updateMap.ForMember(dest => dest.Tenant, opt => opt.Ignore());
+
+        // Connection lifecycle/ownership fields don't exist on either create/update DTO - a client
+        // never dictates these directly. They're driven entirely by RustServersController's own
+        // Enable/Disable actions and by the MassTransit consumers reacting to what a Worker instance
+        // reports (see ConnectionStatusConsumer/ServerConnectionHeartbeatConsumer). Same reasoning as
+        // TenantId above: JumpStart's EntityMappingProfile only auto-ignores audit fields, not these,
+        // so every one needs an explicit Ignore() here or AssertConfigurationIsValid() fails at
+        // startup exactly the way the original TenantId omission did.
+        createMap.ForMember(dest => dest.IsEnabled, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.ConnectionStatus, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.ConnectionStatusDetail, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.ConnectionStatusChangedAtUtc, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.AssignedWorkerId, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.LastHeartbeatUtc, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.IsEnabled, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.ConnectionStatus, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.ConnectionStatusDetail, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.ConnectionStatusChangedAtUtc, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.AssignedWorkerId, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.LastHeartbeatUtc, opt => opt.Ignore());
     }
 }

@@ -7,6 +7,7 @@ using JumpStart.Data;
 using JumpStart.Data.Auditing;
 using JumpStart.Data.MultiTenant;
 using Microsoft.EntityFrameworkCore;
+using RustArchon.Messaging.Contracts;
 
 namespace RustArchon.Api.Data;
 
@@ -65,4 +66,48 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// </summary>
     [MaxLength(500)]
     public string? Description { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this server should have a persistent WebRCON connection at all. Disabling
+    /// a server publishes <see cref="ServerLifecycleChangeType.Disabled"/> so whichever
+    /// <c>RustArchon.Worker</c> instance owns its connection tears it down; re-enabling publishes a
+    /// fresh <see cref="ConnectToServer"/> claim.
+    /// </summary>
+    public bool IsEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the live state of this server's underlying WebRCON socket, as last reported by
+    /// <see cref="ConnectionStatusChanged"/>. This is the UI-facing "is it actually connected right
+    /// now" signal - distinct from <see cref="AssignedWorkerId"/>/<see cref="LastHeartbeatUtc"/>
+    /// below, which answer "is a worker still responsible for this server at all" (a server can have
+    /// a very fresh heartbeat while sitting in <see cref="RconConnectionStatus.Reconnecting"/>).
+    /// </summary>
+    public RconConnectionStatus ConnectionStatus { get; set; } = RconConnectionStatus.Disconnected;
+
+    /// <summary>
+    /// Gets or sets a short human-readable detail for <see cref="ConnectionStatus"/> (e.g. an error
+    /// message), as last reported by <see cref="ConnectionStatusChanged"/>.
+    /// </summary>
+    [MaxLength(200)]
+    public string? ConnectionStatusDetail { get; set; }
+
+    /// <summary>
+    /// Gets or sets when <see cref="ConnectionStatus"/> last changed.
+    /// </summary>
+    public DateTimeOffset? ConnectionStatusChangedAtUtc { get; set; }
+
+    /// <summary>
+    /// Gets or sets the id of the <c>RustArchon.Worker</c> instance currently responsible for this
+    /// server's connection, as last reported by <see cref="ServerConnectionHeartbeat"/>. Internal
+    /// ownership/liveness plumbing only - never exposed through <c>RustServerDto</c>.
+    /// </summary>
+    public Guid? AssignedWorkerId { get; set; }
+
+    /// <summary>
+    /// Gets or sets when the owning worker last heartbeated for this server. <c>ServerClaimSweepService</c>
+    /// re-publishes a <see cref="ConnectToServer"/> claim for any enabled server whose heartbeat is
+    /// null or older than its staleness threshold, which is what makes a crashed worker's servers get
+    /// picked up by a survivor. Internal plumbing only - never exposed through <c>RustServerDto</c>.
+    /// </summary>
+    public DateTimeOffset? LastHeartbeatUtc { get; set; }
 }

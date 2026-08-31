@@ -5,7 +5,6 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Repositories;
 using RustArchon.Shared.DTOs;
@@ -15,8 +14,8 @@ namespace RustArchon.Api.Controllers;
 /// <summary>
 /// Anonymous endpoints used by the Register page, called before any account/tenant exists - there is
 /// no user to authenticate this call with yet, unlike everything protected by <c>[EntityAuthorize]</c>
-/// or the <c>PlatformAdmin</c> policy. See <see cref="InvitationCodesController"/> for the
-/// platform-admin side (minting/deactivating codes).
+/// or the <c>PlatformAdmin</c>/<c>ManagePlatformSettings</c> policies. See
+/// <see cref="InvitationCodesController"/> for the platform-admin side (minting/deactivating codes).
 /// </summary>
 /// <remarks>
 /// Redemption is deliberately the last gate in <c>Register.razor</c>'s flow, after the Identity user
@@ -29,22 +28,24 @@ namespace RustArchon.Api.Controllers;
 public class InvitationsController : ControllerBase
 {
     private readonly IInvitationCodeRepository _repository;
-    private readonly IOptions<InvitationCodeOptions> _options;
+    private readonly IPlatformSettingsCache _settingsCache;
 
-    public InvitationsController(IInvitationCodeRepository repository, IOptions<InvitationCodeOptions> options)
+    public InvitationsController(IInvitationCodeRepository repository, IPlatformSettingsCache settingsCache)
     {
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _settingsCache = settingsCache ?? throw new ArgumentNullException(nameof(settingsCache));
     }
 
     /// <summary>
     /// Reports whether registration currently requires an invitation code, so the Register page can
-    /// decide whether to show/require the field at all - see <see cref="InvitationCodeOptions"/>.
+    /// decide whether to show/require the field at all - see
+    /// <see cref="PlatformSettingsRegistry.InvitationCodesEnabled"/>.
     /// </summary>
     [HttpGet("status")]
-    public ActionResult<InvitationStatusDto> GetStatus()
+    public async Task<ActionResult<InvitationStatusDto>> GetStatus()
     {
-        return Ok(new InvitationStatusDto { Enabled = _options.Value.Enabled });
+        var enabled = await _settingsCache.GetBooleanAsync(PlatformSettingsRegistry.InvitationCodesEnabled, defaultValue: true);
+        return Ok(new InvitationStatusDto { Enabled = enabled });
     }
 
     /// <summary>
@@ -55,7 +56,8 @@ public class InvitationsController : ControllerBase
     [HttpPost("redeem")]
     public async Task<ActionResult<RedeemInvitationCodeResult>> Redeem([FromBody] RedeemInvitationCodeRequest request)
     {
-        if (!_options.Value.Enabled)
+        var enabled = await _settingsCache.GetBooleanAsync(PlatformSettingsRegistry.InvitationCodesEnabled, defaultValue: true);
+        if (!enabled)
         {
             return Ok(new RedeemInvitationCodeResult { Success = true });
         }
