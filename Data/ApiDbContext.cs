@@ -38,6 +38,16 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// </summary>
     public DbSet<PlatformSetting> PlatformSettings { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the PlayerSession DbSet.
+    /// </summary>
+    public DbSet<PlayerSession> PlayerSessions { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PlayerKillEvent DbSet.
+    /// </summary>
+    public DbSet<PlayerKillEvent> PlayerKillEvents { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

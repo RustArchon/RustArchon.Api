@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using JumpStart.Repositories;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Data;
+using RustArchon.Messaging.Contracts;
 
 namespace RustArchon.Api.Repositories;
 
@@ -46,5 +47,20 @@ public class RustServerRepository(ApiDbContext context, IUserContext? userContex
                 && server.IsEnabled
                 && (server.LastHeartbeatUtc == null || server.LastHeartbeatUtc < staleBefore))
             .ToListAsync();
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryApplyConnectionStatusAsync(
+        Guid serverId, RconConnectionStatus status, string? detail, DateTimeOffset changedAtUtc)
+    {
+        var affected = await _dbSet
+            .Where(server => server.Id == serverId
+                && (server.ConnectionStatusChangedAtUtc == null || server.ConnectionStatusChangedAtUtc <= changedAtUtc))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(server => server.ConnectionStatus, status)
+                .SetProperty(server => server.ConnectionStatusDetail, detail)
+                .SetProperty(server => server.ConnectionStatusChangedAtUtc, changedAtUtc));
+
+        return affected > 0;
     }
 }

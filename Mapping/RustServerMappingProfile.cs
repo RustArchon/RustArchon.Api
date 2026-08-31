@@ -32,9 +32,21 @@ public class RustServerMappingProfile
         IMappingExpression<CreateRustServerDto, RustServer> createMap,
         IMappingExpression<UpdateRustServerDto, RustServer> updateMap)
     {
+        // Read side: never map the encrypted key values themselves out - only whether one is set.
+        entityMap.ForMember(dest => dest.HasSteamApiKey, opt => opt.MapFrom(src => !string.IsNullOrEmpty(src.SteamApiKey)));
+        entityMap.ForMember(dest => dest.HasGeolocationApiKey, opt => opt.MapFrom(src => !string.IsNullOrEmpty(src.GeolocationApiKey)));
+
         // Update DTO's RconPassword is optional (null/empty means "keep the existing password") and
         // must never overwrite the encrypted value in place - the controller handles it explicitly.
         updateMap.ForMember(dest => dest.RconPassword, opt => opt.Ignore());
+
+        // Same reasoning as RconPassword above, for both new secrets - update's is optional (null/
+        // empty means "keep the existing key") and must never overwrite the encrypted value in place.
+        // Create's is NOT ignored (matching RconPassword's own create-side treatment): AutoMapper
+        // copies the plaintext straight across by name, and the controller then encrypts whatever
+        // landed on the entity in place, same shape as OnBeforeCreate already does for RconPassword.
+        updateMap.ForMember(dest => dest.SteamApiKey, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.GeolocationApiKey, opt => opt.Ignore());
 
         // TenantId/Tenant are set by the repository from ambient tenant context, never by the client.
         createMap.ForMember(dest => dest.TenantId, opt => opt.Ignore());

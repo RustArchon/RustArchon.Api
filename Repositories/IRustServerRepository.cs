@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using JumpStart.Repositories;
 using RustArchon.Api.Data;
+using RustArchon.Messaging.Contracts;
 
 namespace RustArchon.Api.Repositories;
 
@@ -38,4 +39,20 @@ public interface IRustServerRepository : IRepository<RustServer>
     /// a fresh <c>RustArchon.Messaging.Contracts.ConnectToServer</c> claim for.
     /// </summary>
     Task<IReadOnlyList<RustServer>> GetServersNeedingClaimAsync(DateTimeOffset staleBefore);
+
+    /// <summary>
+    /// Atomically applies a connection-status transition, but only if it isn't older than whatever's
+    /// already stored - a single UPDATE ... WHERE statement rather than a read-then-write, closing a
+    /// real race where two transitions published moments apart (e.g. Connecting immediately followed
+    /// by Connected) can be consumed concurrently on independently-read snapshots, letting whichever
+    /// one happens to save last win regardless of which is actually newer - confirmed live this
+    /// session as the cause of a status badge getting stuck on a stale value indefinitely even though
+    /// the connection itself was fine.
+    /// </summary>
+    /// <returns>
+    /// Whether the row was actually updated - <c>false</c> covers both "no such server" and "this
+    /// transition is stale," which the caller doesn't need to tell apart (either way, nothing to
+    /// relay).
+    /// </returns>
+    Task<bool> TryApplyConnectionStatusAsync(Guid serverId, RconConnectionStatus status, string? detail, DateTimeOffset changedAtUtc);
 }

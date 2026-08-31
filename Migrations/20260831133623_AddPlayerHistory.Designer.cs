@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260831133623_AddPlayerHistory")]
+    partial class AddPlayerHistory
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -881,33 +884,12 @@ namespace RustArchon.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<int?>("LastPing")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal?>("LastViolationLevel")
-                        .HasColumnType("numeric");
-
                     b.Property<Guid>("RustServerId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("SteamId")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<DateTimeOffset?>("SteamInfoCheckedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("SteamMinutesPlayedForever")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("SteamNumberOfGameBans")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("SteamNumberOfVacBans")
-                        .HasColumnType("integer");
-
-                    b.Property<bool?>("SteamVacBanned")
-                        .HasColumnType("boolean");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
@@ -994,12 +976,6 @@ namespace RustArchon.Api.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
-                    b.Property<string>("GeolocationApiKey")
-                        .HasColumnType("text");
-
-                    b.Property<int>("GeolocationProvider")
-                        .HasColumnType("integer");
-
                     b.Property<string>("Host")
                         .IsRequired()
                         .HasMaxLength(255)
@@ -1026,9 +1002,6 @@ namespace RustArchon.Api.Migrations
 
                     b.Property<string>("RconPassword")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("SteamApiKey")
                         .HasColumnType("text");
 
                     b.Property<Guid>("TenantId")
