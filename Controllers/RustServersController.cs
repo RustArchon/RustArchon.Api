@@ -245,6 +245,12 @@ public class RustServersController
     }
 
     /// <summary>
+    /// The largest <c>pageSize</c> this endpoint honors, regardless of what's requested - a hard cap
+    /// against a client (accidentally or otherwise) asking for the entire history table in one call.
+    /// </summary>
+    private const int MaxEventPageSize = 1000;
+
+    /// <summary>
     /// Gets this server's captured console/chat history, newest first.
     /// </summary>
     /// <remarks>
@@ -255,10 +261,22 @@ public class RustServersController
     /// controller's existing "Get" permission avoids both the dead endpoints and a new permission to
     /// grant.
     /// </remarks>
+    /// <param name="isChat">
+    /// Filters to chat-only (<c>true</c>) or console-only (<c>false</c>) frames; omitted returns both,
+    /// interleaved. The Panel's Console/Chat tabs each pass an explicit value so their history and
+    /// line-count controls stay independent of each other.
+    /// </param>
+    /// <param name="since">Only events captured at or after this instant.</param>
+    /// <param name="until">Only events captured at or before this instant.</param>
     [HttpGet("{id}/events")]
     [JumpStart.Repositories.EntityAuthorize(action: "Get")]
     public async Task<ActionResult<PagedResult<RconEventDto>>> GetEvents(
-        Guid id, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 100)
+        Guid id,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 100,
+        [FromQuery] bool? isChat = null,
+        [FromQuery] DateTimeOffset? since = null,
+        [FromQuery] DateTimeOffset? until = null)
     {
         var entity = await _repository.GetByIdAsync(id, null);
         if (entity is null)
@@ -266,8 +284,14 @@ public class RustServersController
             return NotFound();
         }
 
+        pageSize = Math.Clamp(pageSize, 1, MaxEventPageSize);
+
         var events = await _rconEventRepository.GetForServerAsync(
-            id, new QueryOptions<RconEvent> { PageNumber = pageNumber, PageSize = pageSize });
+            id,
+            new QueryOptions<RconEvent> { PageNumber = pageNumber, PageSize = pageSize },
+            isChat,
+            since,
+            until);
 
         return Ok(new PagedResult<RconEventDto>
         {

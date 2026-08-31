@@ -16,11 +16,33 @@ public class RconEventRepository(ApiDbContext context, IUserContext? userContext
     : Repository<RconEvent>(context, userContext), IRconEventRepository
 {
     /// <inheritdoc />
-    public async Task<PagedResult<RconEvent>> GetForServerAsync(Guid rustServerId, QueryOptions<RconEvent> options)
+    public async Task<PagedResult<RconEvent>> GetForServerAsync(
+        Guid rustServerId,
+        QueryOptions<RconEvent> options,
+        bool? isChat = null,
+        DateTimeOffset? since = null,
+        DateTimeOffset? until = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         IQueryable<RconEvent> query = _dbSet.Where(e => e.RustServerId == rustServerId);
+
+        if (isChat.HasValue)
+        {
+            query = isChat.Value
+                ? query.Where(e => e.Type == RconEvent.ChatFrameType)
+                : query.Where(e => e.Type != RconEvent.ChatFrameType);
+        }
+
+        if (since.HasValue)
+        {
+            query = query.Where(e => e.CapturedAtUtc >= since.Value);
+        }
+
+        if (until.HasValue)
+        {
+            query = query.Where(e => e.CapturedAtUtc <= until.Value);
+        }
 
         // Same sorting/pagination shape as Repository<TEntity>.GetAllAsync - see its remarks - except
         // the sort defaults to newest-first when the caller doesn't specify one, since that's the only

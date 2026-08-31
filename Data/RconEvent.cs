@@ -27,6 +27,14 @@ namespace RustArchon.Api.Data;
     Name = "IX_RconEvent_TenantId_RustServerId_CapturedAtUtc")]
 public class RconEvent : Entity, ITenantScoped
 {
+    /// <summary>
+    /// The <see cref="Type"/> value RustWebRconClient reports for a chat frame - the one bit of
+    /// classification consumers (currently just <see cref="Repositories.RconEventRepository"/>'s
+    /// <c>isChat</c> filter) rely on ahead of the full reader-side classification layer this class's
+    /// remarks defer to.
+    /// </summary>
+    public const string ChatFrameType = "Chat";
+
     public Guid TenantId { get; set; }
     public Tenant Tenant { get; set; } = null!;
 

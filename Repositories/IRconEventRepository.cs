@@ -17,5 +17,17 @@ public interface IRconEventRepository : IRepository<RconEvent>
     /// entity (the global tenant query filter still applies - this just pre-filters to one server on
     /// top of it).
     /// </summary>
-    Task<PagedResult<RconEvent>> GetForServerAsync(Guid rustServerId, QueryOptions<RconEvent> options);
+    /// <param name="isChat">
+    /// When <c>true</c>, only frames whose <see cref="RconEvent.Type"/> is "Chat" (case-insensitive);
+    /// when <c>false</c>, everything else; <c>null</c> (default) applies no type filter. Lets the
+    /// Console and Chat tabs each page/filter independently against the same underlying stream.
+    /// </param>
+    /// <param name="since">When set, only events captured at or after this instant.</param>
+    /// <param name="until">When set, only events captured at or before this instant.</param>
+    Task<PagedResult<RconEvent>> GetForServerAsync(
+        Guid rustServerId,
+        QueryOptions<RconEvent> options,
+        bool? isChat = null,
+        DateTimeOffset? since = null,
+        DateTimeOffset? until = null);
 }
