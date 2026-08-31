@@ -10,6 +10,8 @@ using AutoMapper;
 using JumpStart.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Repositories;
@@ -22,14 +24,18 @@ namespace RustArchon.Api.Controllers;
 /// <see cref="InvitationsController"/> for the anonymous side (redemption during registration).
 /// </summary>
 /// <remarks>
-/// Gated by the <c>PlatformAdmin</c> authorization policy (a single admin email read directly from
-/// <c>RUSTARCHON_ADMIN_EMAIL</c>, set up in <c>Program.cs</c>), not <c>[EntityAuthorize]</c> -
+/// Gated by the <c>PlatformAdmin</c> authorization policy - a real <c>Permission</c> claim
+/// (<see cref="Infrastructure.SiteAdminRoleSeeder.ManageInvitationsPermission"/>), resolved and
+/// checked the same way every other permission in this app is, not <c>[EntityAuthorize]</c> -
 /// invitation codes aren't tenant-scoped, so there's no tenant-scoped <c>Role</c> that could safely
 /// grant access to them (granting it through a tenant's own Owner role would mean the normal sign-up
-/// bootstrap flow could accidentally hand every new user admin rights over sign-up itself - a config-
-/// only allow-list avoids that). This is a hand-written controller rather than an
+/// bootstrap flow could accidentally hand every new user admin rights over sign-up itself). Instead,
+/// this permission lives on a single global <c>Role</c> (see <see cref="Infrastructure.SiteAdminRoleSeeder"/>)
+/// that <see cref="AccountBootstrapController"/> grants to whichever account matches
+/// <c>RUSTARCHON_ADMIN_EMAIL</c> at bootstrap time - config decides who gets the role once, not who
+/// passes the check on every request. This is a hand-written controller rather than an
 /// <see cref="JumpStart.Api.Controllers.ApiControllerBase{TEntity,TDto,TCreateDto,TUpdateDto,TRepository}"/>
-/// subclass for the same reason - that base class's actions carry their own per-action
+/// subclass for a related reason - that base class's actions carry their own per-action
 /// <c>[EntityAuthorize]</c> attributes, which would require permission claims nobody will ever hold.
 /// </remarks>
 [ApiController]
@@ -105,6 +111,14 @@ public class InvitationCodesController : ControllerBase
     }
 
     /// <summary>
+    /// The number of times <see cref="Create"/> will regenerate and retry the code on a unique-
+    /// constraint collision before giving up. <see cref="InvitationCodeGenerator"/>'s keyspace
+    /// (~1.15×10^18 codes) makes even one collision astronomically unlikely - this exists purely so
+    /// that "astronomically unlikely" fails safe instead of surfacing as a 500 to the admin.
+    /// </summary>
+    private const int MaxCodeCollisionRetries = 3;
+
+    /// <summary>
     /// Mints a new invitation code. The code string is always generated server-side via
     /// <see cref="InvitationCodeGenerator"/>, regardless of what (if anything) the client sends.
     /// </summary>
@@ -112,16 +126,40 @@ public class InvitationCodesController : ControllerBase
     public async Task<ActionResult<InvitationCodeDto>> Create([FromBody] CreateInvitationCodeDto createDto)
     {
         var entity = _mapper.Map<InvitationCode>(createDto);
-        entity.Code = InvitationCodeGenerator.Generate();
 
         if (!string.IsNullOrWhiteSpace(entity.BoundEmail))
         {
             entity.BoundEmail = entity.BoundEmail.Trim().ToLowerInvariant();
         }
 
-        var created = await _repository.AddAsync(entity);
-        return CreatedAtAction(nameof(GetById), new { id = created.Id }, _mapper.Map<InvitationCodeDto>(created));
+        for (var attempt = 1; ; attempt++)
+        {
+            entity.Code = InvitationCodeGenerator.Generate();
+
+            try
+            {
+                var created = await _repository.AddAsync(entity);
+                return CreatedAtAction(nameof(GetById), new { id = created.Id }, _mapper.Map<InvitationCodeDto>(created));
+            }
+            catch (DbUpdateException ex) when (attempt < MaxCodeCollisionRetries && IsUniqueCodeViolation(ex))
+            {
+                // The generated Code collided with an existing row - regenerate and try again rather
+                // than surfacing this to the admin as a 500. entity.Id/timestamps set by the failed
+                // AddAsync attempt are overwritten by the repository on the next call, same as any
+                // other retried AddAsync.
+            }
+        }
     }
+
+    /// <summary>
+    /// True if <paramref name="ex"/> is specifically a violation of <c>IX_InvitationCode_Code</c>'s
+    /// unique constraint - as opposed to some other <see cref="DbUpdateException"/> (a genuinely bad
+    /// request, a connection failure, etc.) that should propagate as a real error instead of being
+    /// silently retried.
+    /// </summary>
+    private static bool IsUniqueCodeViolation(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } pgEx
+        && pgEx.ConstraintName == "IX_InvitationCode_Code";
 
     /// <summary>
     /// Edits a code's note or flips <see cref="InvitationCode.IsActive"/> to revoke it before it's

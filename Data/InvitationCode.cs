@@ -54,8 +54,9 @@ public class InvitationCode : AuditableEntity
 
     /// <summary>
     /// Gets or sets whether this code can still be redeemed. Set to <c>false</c> to revoke a code
-    /// before it's used, independent of the platform-wide <c>RUSTARCHON_INVITATION_CODES_ENABLED</c>
-    /// kill switch (see <see cref="Infrastructure.InvitationCodeOptions"/>) that turns the whole gate off.
+    /// before it's used, independent of the platform-wide "Require invitation codes to register"
+    /// setting (see <see cref="Infrastructure.PlatformSettingsRegistry.InvitationCodesEnabled"/>) that
+    /// turns the whole gate off.
     /// </summary>
     public bool IsActive { get; set; } = true;
 

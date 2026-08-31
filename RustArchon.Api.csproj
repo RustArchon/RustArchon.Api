@@ -18,6 +18,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+    <!-- Valkey speaks the Redis protocol, so the standard Redis client works against it unmodified. -->
+    <PackageReference Include="StackExchange.Redis" Version="2.8.41" />
     <!-- Pinned to the last open-source MassTransit release - v9 is commercial. See README. -->
     <PackageReference Include="MassTransit" Version="[8.5.10]" />
     <PackageReference Include="MassTransit.RabbitMQ" Version="[8.5.10]" />

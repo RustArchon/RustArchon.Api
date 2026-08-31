@@ -28,6 +28,16 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// </summary>
     public DbSet<InvitationCode> InvitationCodes { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the RconEvent DbSet.
+    /// </summary>
+    public DbSet<RconEvent> RconEvents { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PlatformSetting DbSet.
+    /// </summary>
+    public DbSet<PlatformSetting> PlatformSettings { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using MassTransit;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RustArchon.Api.Infrastructure.Security;
+using RustArchon.Api.Repositories;
 using RustArchon.Messaging.Contracts;
 using RustArchon.Shared.DTOs;
 
@@ -17,10 +19,7 @@ namespace RustArchon.Api.Controllers;
 /// </summary>
 /// <remarks>
 /// Not published to the Docker host (see docker-compose.yml's comment on <c>rustarchon-api</c>) -
-/// reachable only from other containers on the compose network. Today this only has the email
-/// endpoint; <c>RustArchon.Worker</c>'s <c>IInternalApiClient</c> already expects a
-/// <c>GET /internal/rust-servers/{id}</c> action here too, once that side of the RCON pipeline is
-/// built - same scheme, same controller, when that happens.
+/// reachable only from other containers on the compose network.
 /// </remarks>
 [ApiController]
 [Route("internal")]
@@ -28,10 +27,17 @@ namespace RustArchon.Api.Controllers;
 public class InternalController : ControllerBase
 {
     private readonly IPublishEndpoint _publishEndpoint;
+    private readonly IRustServerRepository _rustServerRepository;
+    private readonly IRconCredentialProtector _rconCredentialProtector;
 
-    public InternalController(IPublishEndpoint publishEndpoint)
+    public InternalController(
+        IPublishEndpoint publishEndpoint,
+        IRustServerRepository rustServerRepository,
+        IRconCredentialProtector rconCredentialProtector)
     {
         _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
+        _rustServerRepository = rustServerRepository ?? throw new ArgumentNullException(nameof(rustServerRepository));
+        _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
     }
 
     /// <summary>
@@ -47,5 +53,32 @@ public class InternalController : ControllerBase
     {
         await _publishEndpoint.Publish(new EmailRequested(Guid.NewGuid(), request.To, request.Subject, request.HtmlBody));
         return Accepted();
+    }
+
+    /// <summary>
+    /// Returns a server's connection details, including its decrypted RCON password, for whichever
+    /// <c>RustArchon.Worker</c> instance is trying to claim or refresh its connection. Called from
+    /// <c>ConnectToServerConsumer</c> - see <see cref="InternalRustServerInfoDto"/>'s remarks for the
+    /// exact shape it expects back.
+    /// </summary>
+    /// <returns>404 if the server has been deleted or disabled since the caller last knew about it -
+    /// the consumer treats that the same as "stop trying to connect."</returns>
+    [HttpGet("rust-servers/{id:guid}")]
+    public async Task<ActionResult<InternalRustServerInfoDto>> GetServer(Guid id)
+    {
+        var server = await _rustServerRepository.GetByIdAcrossTenantsAsync(id);
+        if (server is null)
+        {
+            return NotFound();
+        }
+
+        return new InternalRustServerInfoDto(
+            server.Id,
+            server.TenantId,
+            server.Host,
+            server.Port,
+            _rconCredentialProtector.Unprotect(server.RconPassword),
+            server.AssignedWorkerId,
+            server.LastHeartbeatUtc);
     }
 }
