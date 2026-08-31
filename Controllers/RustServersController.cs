@@ -34,10 +34,13 @@ public class RustServersController
     : ApiControllerBase<RustServer, RustServerDto, CreateRustServerDto, UpdateRustServerDto, IRustServerRepository>
 {
     private readonly IRconCredentialProtector _rconCredentialProtector;
+    private readonly IApiKeyProtector _apiKeyProtector;
     private readonly IPublishEndpoint _publishEndpoint;
     private readonly IRequestClient<SendRconCommand> _sendCommandClient;
     private readonly ITenantContext _tenantContext;
     private readonly IRconEventRepository _rconEventRepository;
+    private readonly IPlayerSessionRepository _playerSessionRepository;
+    private readonly IPlayerKillEventRepository _playerKillEventRepository;
 
     public RustServersController(
         IRustServerRepository repository,
@@ -45,17 +48,23 @@ public class RustServersController
         ILogger<RustServersController> logger,
         ICorrelationContextAccessor correlationContext,
         IRconCredentialProtector rconCredentialProtector,
+        IApiKeyProtector apiKeyProtector,
         IPublishEndpoint publishEndpoint,
         IRequestClient<SendRconCommand> sendCommandClient,
         ITenantContext tenantContext,
-        IRconEventRepository rconEventRepository)
+        IRconEventRepository rconEventRepository,
+        IPlayerSessionRepository playerSessionRepository,
+        IPlayerKillEventRepository playerKillEventRepository)
         : base(repository, mapper, logger, correlationContext)
     {
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
+        _apiKeyProtector = apiKeyProtector ?? throw new ArgumentNullException(nameof(apiKeyProtector));
         _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
         _sendCommandClient = sendCommandClient ?? throw new ArgumentNullException(nameof(sendCommandClient));
         _tenantContext = tenantContext ?? throw new ArgumentNullException(nameof(tenantContext));
         _rconEventRepository = rconEventRepository ?? throw new ArgumentNullException(nameof(rconEventRepository));
+        _playerSessionRepository = playerSessionRepository ?? throw new ArgumentNullException(nameof(playerSessionRepository));
+        _playerKillEventRepository = playerKillEventRepository ?? throw new ArgumentNullException(nameof(playerKillEventRepository));
     }
 
     /// <summary>
@@ -65,6 +74,19 @@ public class RustServersController
     protected override (bool isValid, object? errorResult) OnBeforeCreate(RustServer entity)
     {
         entity.RconPassword = _rconCredentialProtector.Protect(entity.RconPassword);
+
+        // Both optional (unlike RconPassword) - AutoMapper already copied whatever plaintext arrived
+        // (or null) straight across by name, same as it does for RconPassword.
+        if (!string.IsNullOrEmpty(entity.SteamApiKey))
+        {
+            entity.SteamApiKey = _apiKeyProtector.Protect(ApiKeyProtectorPurposes.SteamApiKey, entity.SteamApiKey);
+        }
+
+        if (!string.IsNullOrEmpty(entity.GeolocationApiKey))
+        {
+            entity.GeolocationApiKey = _apiKeyProtector.Protect(ApiKeyProtectorPurposes.GeolocationApiKey, entity.GeolocationApiKey);
+        }
+
         return (true, null);
     }
 
@@ -124,6 +146,16 @@ public class RustServersController
         if (!string.IsNullOrEmpty(updateDto.RconPassword))
         {
             entity.RconPassword = _rconCredentialProtector.Protect(updateDto.RconPassword);
+        }
+
+        if (!string.IsNullOrEmpty(updateDto.SteamApiKey))
+        {
+            entity.SteamApiKey = _apiKeyProtector.Protect(ApiKeyProtectorPurposes.SteamApiKey, updateDto.SteamApiKey);
+        }
+
+        if (!string.IsNullOrEmpty(updateDto.GeolocationApiKey))
+        {
+            entity.GeolocationApiKey = _apiKeyProtector.Protect(ApiKeyProtectorPurposes.GeolocationApiKey, updateDto.GeolocationApiKey);
         }
 
         var updated = await _repository.UpdateAsync(entity);
@@ -299,6 +331,192 @@ public class RustServersController
             TotalCount = events.TotalCount,
             PageNumber = events.PageNumber,
             PageSize = events.PageSize
+        });
+    }
+
+    /// <summary>
+    /// Gets everyone currently connected to this server - sessions with no
+    /// <see cref="Data.PlayerSession.DisconnectedAtUtc"/> yet.
+    /// </summary>
+    [HttpGet("{id}/players")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<IEnumerable<PlayerSessionDto>>> GetCurrentPlayers(Guid id)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        var players = await _playerSessionRepository.GetCurrentlyConnectedAsync(id);
+        return Ok(_mapper.Map<IEnumerable<PlayerSessionDto>>(players));
+    }
+
+    /// <summary>
+    /// Gets this server's connect/disconnect history, newest-connection-first.
+    /// </summary>
+    /// <param name="since">Only sessions connected at or after this instant.</param>
+    /// <param name="until">Only sessions connected at or before this instant.</param>
+    [HttpGet("{id}/players/history")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<PagedResult<PlayerSessionDto>>> GetPlayerHistory(
+        Guid id,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 100,
+        [FromQuery] DateTimeOffset? since = null,
+        [FromQuery] DateTimeOffset? until = null)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        pageSize = Math.Clamp(pageSize, 1, MaxEventPageSize);
+
+        var sessions = await _playerSessionRepository.GetForServerAsync(
+            id, new QueryOptions<PlayerSession> { PageNumber = pageNumber, PageSize = pageSize }, since, until);
+
+        return Ok(new PagedResult<PlayerSessionDto>
+        {
+            Items = _mapper.Map<IEnumerable<PlayerSessionDto>>(sessions.Items),
+            TotalCount = sessions.TotalCount,
+            PageNumber = sessions.PageNumber,
+            PageSize = sessions.PageSize
+        });
+    }
+
+    /// <summary>
+    /// Gets this server's kill history, newest first. See <see cref="PlayerKilled"/>'s remarks for why
+    /// this is heuristic, not authoritative.
+    /// </summary>
+    /// <param name="since">Only kills that occurred at or after this instant.</param>
+    /// <param name="until">Only kills that occurred at or before this instant.</param>
+    [HttpGet("{id}/kills")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<PagedResult<PlayerKillEventDto>>> GetKills(
+        Guid id,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 100,
+        [FromQuery] DateTimeOffset? since = null,
+        [FromQuery] DateTimeOffset? until = null)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        pageSize = Math.Clamp(pageSize, 1, MaxEventPageSize);
+
+        var kills = await _playerKillEventRepository.GetForServerAsync(
+            id, new QueryOptions<PlayerKillEvent> { PageNumber = pageNumber, PageSize = pageSize }, since, until);
+
+        return Ok(new PagedResult<PlayerKillEventDto>
+        {
+            Items = _mapper.Map<IEnumerable<PlayerKillEventDto>>(kills.Items),
+            TotalCount = kills.TotalCount,
+            PageNumber = kills.PageNumber,
+            PageSize = kills.PageSize
+        });
+    }
+
+    /// <summary>
+    /// Gets one row per distinct player who has ever connected to this server but isn't currently
+    /// connected, newest-last-connection-first - see <see cref="IPlayerSessionRepository.GetInactivePlayersAsync"/>.
+    /// </summary>
+    [HttpGet("{id}/players/inactive")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<PagedResult<InactivePlayerDto>>> GetInactivePlayers(
+        Guid id,
+        [FromQuery] int pageNumber = 1,
+        [FromQuery] int pageSize = 100)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        pageSize = Math.Clamp(pageSize, 1, MaxEventPageSize);
+
+        var inactivePlayers = await _playerSessionRepository.GetInactivePlayersAsync(id, pageNumber, pageSize);
+        return Ok(inactivePlayers);
+    }
+
+    /// <summary>
+    /// Gets one player's full summary on this server - see <see cref="IPlayerSessionRepository.GetPlayerDetailAsync"/>.
+    /// </summary>
+    [HttpGet("{id}/players/{steamId}")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<PlayerDetailDto>> GetPlayerDetail(Guid id, string steamId)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        var detail = await _playerSessionRepository.GetPlayerDetailAsync(id, steamId);
+        if (detail is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(detail);
+    }
+
+    /// <summary>
+    /// Gets one player's session history on this server, newest-connection-first.
+    /// </summary>
+    [HttpGet("{id}/players/{steamId}/sessions")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<PagedResult<PlayerSessionDto>>> GetPlayerSessions(
+        Guid id, string steamId, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 100)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        pageSize = Math.Clamp(pageSize, 1, MaxEventPageSize);
+
+        var sessions = await _playerSessionRepository.GetSessionsForPlayerAsync(id, steamId, pageNumber, pageSize);
+
+        return Ok(new PagedResult<PlayerSessionDto>
+        {
+            Items = _mapper.Map<IEnumerable<PlayerSessionDto>>(sessions.Items),
+            TotalCount = sessions.TotalCount,
+            PageNumber = sessions.PageNumber,
+            PageSize = sessions.PageSize
+        });
+    }
+
+    /// <summary>
+    /// Gets every kill on this server involving this player (as victim or killer), newest first.
+    /// </summary>
+    [HttpGet("{id}/players/{steamId}/kills")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<PagedResult<PlayerKillEventDto>>> GetPlayerKills(
+        Guid id, string steamId, [FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 100)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        pageSize = Math.Clamp(pageSize, 1, MaxEventPageSize);
+
+        var kills = await _playerKillEventRepository.GetForPlayerAsync(id, steamId, pageNumber, pageSize);
+
+        return Ok(new PagedResult<PlayerKillEventDto>
+        {
+            Items = _mapper.Map<IEnumerable<PlayerKillEventDto>>(kills.Items),
+            TotalCount = kills.TotalCount,
+            PageNumber = kills.PageNumber,
+            PageSize = kills.PageSize
         });
     }
 

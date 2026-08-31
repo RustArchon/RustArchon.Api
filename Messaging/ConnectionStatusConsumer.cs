@@ -28,17 +28,23 @@ public class ConnectionStatusConsumer(
     {
         var message = context.Message;
 
-        var server = await repository.GetByIdAsync(message.ServerId, null);
-        if (server is null)
+        // A single atomic UPDATE ... WHERE, not a read-then-write - status updates are published
+        // fire-and-forget with no guaranteed delivery order, and this endpoint can process more than
+        // one concurrently (no explicit concurrency limit is configured). Two transitions published
+        // moments apart (e.g. Connecting immediately followed by Connected) can therefore be consumed
+        // on two overlapping calls, each starting from its own independently-read snapshot - a plain
+        // read-modify-write would let whichever one happens to save last win, regardless of which is
+        // actually newer, which is exactly what left the UI stuck showing a stale status indefinitely
+        // this session even though the connection itself was fine the whole time. See
+        // TryApplyConnectionStatusAsync's remarks.
+        var applied = await repository.TryApplyConnectionStatusAsync(
+            message.ServerId, message.Status, message.Detail, message.ChangedAtUtc);
+        if (!applied)
         {
-            // Deleted since the status change was published - nothing to update or relay.
+            // Either the server no longer exists, or this transition is older than what's already
+            // stored - either way, nothing to relay.
             return;
         }
-
-        server.ConnectionStatus = message.Status;
-        server.ConnectionStatusDetail = message.Detail;
-        server.ConnectionStatusChangedAtUtc = message.ChangedAtUtc;
-        await repository.UpdateAsync(server);
 
         await hubContext.Clients.Group(RconHub.GroupName(message.ServerId))
             .SendAsync("ReceiveStatusChanged", message.ServerId, message.Status, message.Detail);

@@ -8,6 +8,7 @@ using JumpStart.Data.Auditing;
 using JumpStart.Data.MultiTenant;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Messaging.Contracts;
+using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Data;
 
@@ -110,4 +111,26 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// picked up by a survivor. Internal plumbing only - never exposed through <c>RustServerDto</c>.
     /// </summary>
     public DateTimeOffset? LastHeartbeatUtc { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Steam Web API key used to look up VAC/game-ban status and hours-on-record for
+    /// players on this server, encrypted at rest. Set only via
+    /// <see cref="Infrastructure.Security.IApiKeyProtector.Protect"/> - never store plaintext here.
+    /// <c>null</c> means this server has no Steam integration configured (those columns on
+    /// <see cref="PlayerSession"/> simply stay unpopulated).
+    /// </summary>
+    public string? SteamApiKey { get; set; }
+
+    /// <summary>
+    /// Gets or sets which geolocation/VPN-detection provider (if any) to use for players connecting
+    /// to this server. <see cref="GeolocationProviderKind.None"/> (the default) skips lookups
+    /// entirely - see <see cref="Infrastructure.Geolocation.IGeolocationService"/>.
+    /// </summary>
+    public GeolocationProviderKind GeolocationProvider { get; set; } = GeolocationProviderKind.None;
+
+    /// <summary>
+    /// Gets or sets the API key for <see cref="GeolocationProvider"/>, encrypted at rest. Set only via
+    /// <see cref="Infrastructure.Security.IApiKeyProtector.Protect"/> - never store plaintext here.
+    /// </summary>
+    public string? GeolocationApiKey { get; set; }
 }

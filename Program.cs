@@ -13,7 +13,10 @@ using RustArchon.Api.Data;
 using RustArchon.Api.Hubs;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Authentication;
+using RustArchon.Api.Infrastructure.Geolocation;
+using RustArchon.Api.Infrastructure.Geolocation.Providers;
 using RustArchon.Api.Infrastructure.Security;
+using RustArchon.Api.Infrastructure.Steam;
 using RustArchon.Api.Messaging;
 using RustArchon.Api.Repositories;
 using RustArchon.Api.Services;
@@ -106,6 +109,26 @@ if (!string.IsNullOrWhiteSpace(valkeyConnectionString))
 builder.Services.AddScoped<IPlatformSettingsCache, PlatformSettingsCache>();
 
 // ============================================
+// 4b-2. PLAYER GEOLOCATION (stubs - see Infrastructure/Geolocation/Providers)
+// ============================================
+// Provider selection and API key are a per-server setting now (RustServer.GeolocationProvider/
+// GeolocationApiKey, encrypted via IApiKeyProtector) - no global config/appsettings section anymore.
+// Every provider below stays a genuine no-op regardless of key until its stub implementation is
+// filled in - see each provider's remarks.
+builder.Services.AddHttpClient<IGeolocationProvider, ProxyCheckIoGeolocationProvider>();
+builder.Services.AddHttpClient<IGeolocationProvider, IpHubInfoGeolocationProvider>();
+builder.Services.AddHttpClient<IGeolocationProvider, IpInfoIoGeolocationProvider>();
+builder.Services.AddScoped<IGeolocationService, GeolocationService>();
+
+// ============================================
+// 4b-3. STEAM WEB API (VAC/game bans, hours-on-record - see Infrastructure/Steam)
+// ============================================
+// Also a per-server setting (RustServer.SteamApiKey, encrypted via IApiKeyProtector) - the key
+// arrives per-call, so one registered client serves every server regardless of which key each uses.
+builder.Services.AddHttpClient<ISteamApiClient, SteamApiClient>();
+builder.Services.AddScoped<IApiKeyProtector, ApiKeyProtector>();
+
+// ============================================
 // 4c. MESSAGING (RABBITMQ)
 // ============================================
 // Username/Password come from RABBITMQ_DEFAULT_USER/PASS directly - the RabbitMQ container's own
@@ -123,6 +146,10 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<RconFrameIngestionConsumer>();
     x.AddConsumer<ConnectionStatusConsumer>();
     x.AddConsumer<ServerConnectionHeartbeatConsumer>();
+    x.AddConsumer<PlayerConnectedConsumer>();
+    x.AddConsumer<PlayerDisconnectedConsumer>();
+    x.AddConsumer<PlayerKilledConsumer>();
+    x.AddConsumer<PlayerSessionSnapshotUpdatedConsumer>();
 
     // 10s matches RustArchon.Worker's SendRconCommandConsumer fanout - see RustServersController's
     // SendCommand action for how a RequestTimeoutException (no instance responded - e.g. no worker
@@ -279,6 +306,16 @@ builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+
+        // Refit's client-side default serializer (used by every RustArchon.Panel client call) writes
+        // enums as their string name, not the plain numeric default this options block would otherwise
+        // leave in place - confirmed live as a genuine 400 the moment GeolocationProviderKind became
+        // the first enum this codebase ever sent in a request body (RconConnectionStatus on
+        // RustServerDto is read-only, never part of a create/update payload, so this mismatch had
+        // never been exercised before). Matching Refit's convention here - rather than fighting it on
+        // the Panel side - also makes every enum this API returns read as a name instead of a magic
+        // number, which is the more debuggable choice either way.
+        options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
     });
 
 var app = builder.Build();
