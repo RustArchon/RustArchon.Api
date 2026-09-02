@@ -48,6 +48,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// </summary>
     public DbSet<PlayerKillEvent> PlayerKillEvents { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the ServerInfoSnapshot DbSet.
+    /// </summary>
+    public DbSet<ServerInfoSnapshot> ServerInfoSnapshots { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

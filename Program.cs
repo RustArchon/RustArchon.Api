@@ -150,6 +150,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<PlayerDisconnectedConsumer>();
     x.AddConsumer<PlayerKilledConsumer>();
     x.AddConsumer<PlayerSessionSnapshotUpdatedConsumer>();
+    x.AddConsumer<ServerInfoSnapshotCapturedConsumer>();
 
     // 10s matches RustArchon.Worker's SendRconCommandConsumer fanout - see RustServersController's
     // SendCommand action for how a RequestTimeoutException (no instance responded - e.g. no worker
