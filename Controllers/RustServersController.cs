@@ -41,6 +41,7 @@ public class RustServersController
     private readonly IRconEventRepository _rconEventRepository;
     private readonly IPlayerSessionRepository _playerSessionRepository;
     private readonly IPlayerKillEventRepository _playerKillEventRepository;
+    private readonly IServerInfoSnapshotRepository _serverInfoSnapshotRepository;
 
     public RustServersController(
         IRustServerRepository repository,
@@ -54,7 +55,8 @@ public class RustServersController
         ITenantContext tenantContext,
         IRconEventRepository rconEventRepository,
         IPlayerSessionRepository playerSessionRepository,
-        IPlayerKillEventRepository playerKillEventRepository)
+        IPlayerKillEventRepository playerKillEventRepository,
+        IServerInfoSnapshotRepository serverInfoSnapshotRepository)
         : base(repository, mapper, logger, correlationContext)
     {
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
@@ -65,6 +67,7 @@ public class RustServersController
         _rconEventRepository = rconEventRepository ?? throw new ArgumentNullException(nameof(rconEventRepository));
         _playerSessionRepository = playerSessionRepository ?? throw new ArgumentNullException(nameof(playerSessionRepository));
         _playerKillEventRepository = playerKillEventRepository ?? throw new ArgumentNullException(nameof(playerKillEventRepository));
+        _serverInfoSnapshotRepository = serverInfoSnapshotRepository ?? throw new ArgumentNullException(nameof(serverInfoSnapshotRepository));
     }
 
     /// <summary>
@@ -442,6 +445,44 @@ public class RustServersController
 
         var inactivePlayers = await _playerSessionRepository.GetInactivePlayersAsync(id, pageNumber, pageSize);
         return Ok(inactivePlayers);
+    }
+
+    /// <summary>
+    /// The widest <c>since</c>/<c>until</c> range this endpoint honors - a hard cap against a client
+    /// asking for a chart's worth of data spanning, say, a full year of 60-second snapshots.
+    /// </summary>
+    private static readonly TimeSpan MaxServerInfoHistoryRange = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// Gets this server's <c>serverinfo</c> snapshot history (player count, network in/out, memory)
+    /// for the Stats tab's graphs, oldest first. Defaults to the last 24 hours when <paramref name="since"/>
+    /// is omitted.
+    /// </summary>
+    /// <param name="since">Only snapshots captured at or after this instant. Defaults to 24 hours ago.</param>
+    /// <param name="until">Only snapshots captured at or before this instant. Defaults to now.</param>
+    [HttpGet("{id}/serverinfo/history")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<IEnumerable<ServerInfoSnapshotDto>>> GetServerInfoHistory(
+        Guid id,
+        [FromQuery] DateTimeOffset? since = null,
+        [FromQuery] DateTimeOffset? until = null)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        var untilValue = until ?? DateTimeOffset.UtcNow;
+        var sinceValue = since ?? untilValue - TimeSpan.FromHours(24);
+
+        if (untilValue - sinceValue > MaxServerInfoHistoryRange)
+        {
+            sinceValue = untilValue - MaxServerInfoHistoryRange;
+        }
+
+        var snapshots = await _serverInfoSnapshotRepository.GetForServerAsync(id, sinceValue, untilValue);
+        return Ok(_mapper.Map<IEnumerable<ServerInfoSnapshotDto>>(snapshots));
     }
 
     /// <summary>
