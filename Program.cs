@@ -7,6 +7,7 @@ using MassTransit;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using RustArchon.Api.Data;
@@ -403,6 +404,20 @@ else
 }
 
 app.UseCorrelate();
+
+// Recovers the original scheme/host from X-Forwarded-Proto/-For, set by whatever reverse proxy sits
+// in front of this container (e.g. a Cloudflare Tunnel's cloudflared, which terminates the public
+// HTTPS connection and forwards plain HTTP to this container) - without this, the app thinks every
+// request arrived over plain HTTP, which throws off anything that inspects Request.Scheme (redirect
+// URLs, secure-cookie decisions). KnownProxies/KnownNetworks are deliberately left empty (trust any
+// forwarder) rather than pinned to a specific proxy IP - safe here specifically because these
+// containers are never reachable except through that one reverse proxy (no port is exposed straight
+// to the public internet - see docker-compose.yml/README), so there's no other path a spoofed header
+// could arrive on.
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+});
 
 // The official .NET container base images set this to "true" - skip redirecting to HTTPS when the
 // app only has an HTTP endpoint to begin with (ASPNETCORE_URLS=http://+:8080 in the Dockerfiles),
