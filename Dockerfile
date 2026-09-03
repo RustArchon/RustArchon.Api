@@ -3,6 +3,12 @@
 # used to be when JumpStart lived two directories up as a sibling checkout.
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+# Npgsql probes for GSSAPI/Kerberos support on every connection attempt regardless of which auth
+# mechanism is actually used (password auth, here) - without this, it's a harmless but noisy
+# "Cannot load library libgssapi_krb5.so.2" logged on every single connection open. Confirmed by hand:
+# Postgres connectivity works either way, this only silences the warning.
+RUN apt-get update && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
