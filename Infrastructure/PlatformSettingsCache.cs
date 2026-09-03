@@ -84,7 +84,8 @@ public class PlatformSettingsCache(
         }
     }
 
-    private async Task<string?> GetStringAsync(string key)
+    /// <inheritdoc />
+    public async Task<string?> GetStringAsync(string key)
     {
         var redis = Redis;
         if (redis is not null)

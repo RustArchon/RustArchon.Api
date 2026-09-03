@@ -53,6 +53,16 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// </summary>
     public DbSet<ServerInfoSnapshot> ServerInfoSnapshots { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the Plan DbSet.
+    /// </summary>
+    public DbSet<Plan> Plans { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the TenantPlan DbSet.
+    /// </summary>
+    public DbSet<TenantPlan> TenantPlans { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -68,5 +78,15 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
         // name is cleared.
         modelBuilder.Entity<Tenant>().Property(t => t.Settings).HasColumnType(null);
         modelBuilder.Entity<UserTenant>().Property(t => t.Settings).HasColumnType(null);
+
+        // Partial unique index: at most one Active Plan per Name. A plain (non-filtered) unique index
+        // on Name alone would wrongly limit this table to one row per Name ever - see Plan's own
+        // remarks for why many historical rows per Name is the whole point. Npgsql maps HasFilter to a
+        // native Postgres partial index (CREATE UNIQUE INDEX ... WHERE "Active").
+        modelBuilder.Entity<Plan>()
+            .HasIndex(p => p.Name)
+            .IsUnique()
+            .HasFilter("\"Active\"")
+            .HasDatabaseName("IX_Plan_Name_WhereActive");
     }
 }

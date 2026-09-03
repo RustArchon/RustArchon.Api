@@ -267,6 +267,8 @@ builder.Services.AddAuthorization(options =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageInvitationsPermission));
     options.AddPolicy("ManagePlatformSettings", policy =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageSettingsPermission));
+    options.AddPolicy("ManagePlans", policy =>
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManagePlansPermission));
 });
 
 // ============================================
@@ -351,6 +353,11 @@ using (var migrationScope = app.Services.CreateScope())
     // InvitationCodesEnabled) with its default value if the row doesn't exist yet.
     await PlatformSettingsRegistry.EnsureDefaultsAsync(
         dbContext, builder.Configuration, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See PlanSeeder's remarks - seeds the four initial pricing tiers (Wood/Stone/Metal/HQM) if no
+    // Plan rows exist yet at all.
+    await PlanSeeder.EnsureDefaultsAsync(
+        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 }
 
 // ============================================
