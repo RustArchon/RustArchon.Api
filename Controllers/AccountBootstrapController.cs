@@ -13,6 +13,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
+using RustArchon.Api.Repositories;
+using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Controllers;
 
@@ -44,6 +46,9 @@ public class AccountBootstrapController : ControllerBase
     private readonly ITenantRepository _tenantRepository;
     private readonly IUserTenantRepository _userTenantRepository;
     private readonly IRoleRepository _roleRepository;
+    private readonly IPlanRepository _planRepository;
+    private readonly ITenantPlanRepository _tenantPlanRepository;
+    private readonly IPlatformSettingsCache _settingsCache;
     private readonly ApiDbContext _dbContext;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AccountBootstrapController> _logger;
@@ -52,6 +57,9 @@ public class AccountBootstrapController : ControllerBase
         ITenantRepository tenantRepository,
         IUserTenantRepository userTenantRepository,
         IRoleRepository roleRepository,
+        IPlanRepository planRepository,
+        ITenantPlanRepository tenantPlanRepository,
+        IPlatformSettingsCache settingsCache,
         ApiDbContext dbContext,
         IConfiguration configuration,
         ILogger<AccountBootstrapController> logger)
@@ -59,6 +67,9 @@ public class AccountBootstrapController : ControllerBase
         _tenantRepository = tenantRepository ?? throw new ArgumentNullException(nameof(tenantRepository));
         _userTenantRepository = userTenantRepository ?? throw new ArgumentNullException(nameof(userTenantRepository));
         _roleRepository = roleRepository ?? throw new ArgumentNullException(nameof(roleRepository));
+        _planRepository = planRepository ?? throw new ArgumentNullException(nameof(planRepository));
+        _tenantPlanRepository = tenantPlanRepository ?? throw new ArgumentNullException(nameof(tenantPlanRepository));
+        _settingsCache = settingsCache ?? throw new ArgumentNullException(nameof(settingsCache));
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -107,6 +118,33 @@ public class AccountBootstrapController : ControllerBase
         {
             Name = string.IsNullOrWhiteSpace(tenantName) ? "My Organization" : tenantName,
             IsActive = true
+        });
+
+        // Every Organization must have a Plan from the moment it exists - see TenantPlan's remarks.
+        // Which one a brand-new Organization starts on: the site admin's explicit choice (see
+        // PlatformSettingsRegistry.DefaultPlanId) if they've made one - honored even if that Plan has
+        // since been deactivated, since that's a deliberate admin decision, not a stale reference - or
+        // otherwise the cheapest currently-active Plan (no more hardcoded "Wood" - see Plan.Name's
+        // remarks on why Type went away). Upgrading is a separate, later action, not something
+        // bootstrap decides. No usable Plan at all means the deployment's seed data is broken
+        // (PlanSeeder should have guaranteed at least one exists) - failing loudly here is deliberate
+        // rather than silently leaving the tenant planless, even though the caller
+        // (NewTenantBootstrapper) treats this whole endpoint as best-effort and will just log it.
+        var defaultPlanIdRaw = await _settingsCache.GetStringAsync(PlatformSettingsRegistry.DefaultPlanId);
+        Plan? startingPlan = null;
+        if (!string.IsNullOrWhiteSpace(defaultPlanIdRaw) && Guid.TryParse(defaultPlanIdRaw, out var defaultPlanId))
+        {
+            startingPlan = await _planRepository.GetByIdAsync(defaultPlanId, null);
+        }
+
+        startingPlan ??= await _planRepository.GetCheapestActiveAsync()
+            ?? throw new InvalidOperationException("No usable Plan exists - check PlanSeeder ran and at least one Plan is still active.");
+
+        await _tenantPlanRepository.AddAsync(new TenantPlan
+        {
+            TenantId = tenant.Id,
+            PlanId = startingPlan.Id,
+            AssignedAtUtc = DateTimeOffset.UtcNow
         });
 
         await _userTenantRepository.AddAsync(new UserTenant { UserId = userId, TenantId = tenant.Id });

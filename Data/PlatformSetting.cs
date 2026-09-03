@@ -15,7 +15,16 @@ public enum PlatformSettingValueType
 {
     Boolean,
     String,
-    Integer
+    Integer,
+
+    /// <summary>
+    /// <see cref="PlatformSetting.Value"/> is either empty (unset) or a <see cref="Plan.Id"/> Guid,
+    /// stored as its string form same as every other value type. Introduced for
+    /// <see cref="Infrastructure.PlatformSettingsRegistry.DefaultPlanId"/> - lets the admin UI render a
+    /// plan picker instead of a free-text box, and lets a future setting reuse the same picker for
+    /// another Plan-valued choice without inventing a second mechanism.
+    /// </summary>
+    PlanReference
 }
 
 /// <summary>

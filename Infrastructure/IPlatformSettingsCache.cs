@@ -24,6 +24,16 @@ public interface IPlatformSettingsCache
     Task<bool> GetBooleanAsync(string key, bool defaultValue);
 
     /// <summary>
+    /// Gets a setting's raw string value - the only option for
+    /// <see cref="Data.PlatformSettingValueType.String"/>/<see cref="Data.PlatformSettingValueType.PlanReference"/>
+    /// settings, which have no dedicated typed getter of their own the way Boolean does.
+    /// </summary>
+    /// <param name="key">The setting's <see cref="Data.PlatformSetting.Key"/>.</param>
+    /// <returns><c>null</c> if the setting doesn't exist yet; otherwise its current value, which may
+    /// itself be an empty string (e.g. an unset <see cref="PlatformSettingsRegistry.DefaultPlanId"/>).</returns>
+    Task<string?> GetStringAsync(string key);
+
+    /// <summary>
     /// Writes a setting's new value through to the cache immediately - called by
     /// <see cref="Controllers.PlatformSettingsController"/> right after persisting the same value to
     /// Postgres, so every other request sees the change on its very next read instead of waiting for

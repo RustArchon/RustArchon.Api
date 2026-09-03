@@ -39,12 +39,13 @@ public static class SiteAdminRoleSeeder
     public const string RoleName = "Site Admin";
     public const string ManageInvitationsPermission = "Platform.ManageInvitations";
     public const string ManageSettingsPermission = "Platform.ManageSettings";
+    public const string ManagePlansPermission = "Platform.ManagePlans";
 
     /// <summary>
     /// Every permission the "Site Admin" role should hold. Adding a new platform-level capability
     /// later is adding its permission string here - never a migration.
     /// </summary>
-    private static readonly string[] Permissions = [ManageInvitationsPermission, ManageSettingsPermission];
+    private static readonly string[] Permissions = [ManageInvitationsPermission, ManageSettingsPermission, ManagePlansPermission];
 
     /// <summary>
     /// Ensures the global "Site Admin" role exists and grants every permission in
