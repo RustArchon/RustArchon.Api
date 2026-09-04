@@ -3,6 +3,7 @@
 using System.Threading.Tasks;
 using MassTransit;
 using Microsoft.AspNetCore.SignalR;
+using RustArchon.Api.Data;
 using RustArchon.Api.Hubs;
 using RustArchon.Api.Repositories;
 using RustArchon.Messaging.Contracts;
@@ -22,6 +23,7 @@ namespace RustArchon.Api.Messaging;
 /// </remarks>
 public class ConnectionStatusConsumer(
     IRustServerRepository repository,
+    IConnectionLogRepository connectionLogRepository,
     IHubContext<RconHub> hubContext) : IConsumer<ConnectionStatusChanged>
 {
     public async Task Consume(ConsumeContext<ConnectionStatusChanged> context)
@@ -42,11 +44,66 @@ public class ConnectionStatusConsumer(
         if (!applied)
         {
             // Either the server no longer exists, or this transition is older than what's already
-            // stored - either way, nothing to relay.
+            // stored - either way, nothing to relay or log.
             return;
         }
 
+        var level = LevelFor(message.Status);
+        var logMessage = message.Detail ?? DefaultMessageFor(message.Status);
+
+        // Appended unconditionally, even for a transition TryApplyConnectionStatusAsync's own
+        // out-of-order guard would otherwise treat as "already applied" - it already passed that guard
+        // to get here, so this is always a real, newly-observed transition worth keeping. Separate
+        // from the RustServer row above on purpose: that row only ever holds the *current* status
+        // (each write overwrites the last), while this is the append-only history a human actually
+        // needs to answer "why did this drop earlier" after the fact - see ConnectionLogEntry's
+        // remarks and the Logs tab.
+        await connectionLogRepository.AddAsync(new ConnectionLogEntry
+        {
+            TenantId = message.TenantId,
+            RustServerId = message.ServerId,
+            Level = level,
+            Message = logMessage,
+            Status = message.Status,
+            OccurredAtUtc = message.ChangedAtUtc
+        });
+
+        // ReceiveStatusChanged: the live badge feed (ServerDetail's header pill, ServersList's icons) -
+        // unchanged. ReceiveLogEntry: a second, separate relay so the Logs tab's live stream sees this
+        // transition alongside WorkerDiagnosticLoggedConsumer's own entries (see its remarks) without
+        // needing to also understand the badge-specific event shape.
         await hubContext.Clients.Group(RconHub.GroupName(message.ServerId))
             .SendAsync("ReceiveStatusChanged", message.ServerId, message.Status, message.Detail);
+        await hubContext.Clients.Group(RconHub.GroupName(message.ServerId))
+            .SendAsync("ReceiveLogEntry", message.ServerId, level, logMessage, message.Status, message.ChangedAtUtc);
     }
+
+    /// <summary>
+    /// The Logs tab badge severity a given connection status implies - see <see cref="ConnectionLogLevel"/>'s
+    /// remarks. <see cref="RconConnectionStatus.Connecting"/> and <see cref="RconConnectionStatus.Connected"/>
+    /// are both routine, expected states, not anything to flag; the rest all mean something needs
+    /// attention (already lost, mid-retry, or an outright failure).
+    /// </summary>
+    private static ConnectionLogLevel LevelFor(RconConnectionStatus status) => status switch
+    {
+        RconConnectionStatus.Connecting => ConnectionLogLevel.Info,
+        RconConnectionStatus.Connected => ConnectionLogLevel.Info,
+        RconConnectionStatus.Error => ConnectionLogLevel.Error,
+        _ => ConnectionLogLevel.Warning // Reconnecting, Disconnected
+    };
+
+    /// <summary>
+    /// Fallback log text for a transition published with no <see cref="ConnectionStatusChanged.Detail"/> -
+    /// only <see cref="RconConnectionStatus.Connected"/> ever actually publishes with a null Detail in
+    /// practice (see <c>ServerConnectionActor.OnConnectionChanged</c>), but every status is covered here
+    /// so this can never leave <see cref="ConnectionLogEntry.Message"/> blank.
+    /// </summary>
+    private static string DefaultMessageFor(RconConnectionStatus status) => status switch
+    {
+        RconConnectionStatus.Connecting => "Connecting",
+        RconConnectionStatus.Connected => "Connected",
+        RconConnectionStatus.Reconnecting => "Reconnecting",
+        RconConnectionStatus.Error => "Connection error",
+        _ => "Disconnected"
+    };
 }
