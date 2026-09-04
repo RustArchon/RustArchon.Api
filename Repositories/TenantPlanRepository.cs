@@ -17,5 +17,5 @@ public class TenantPlanRepository(ApiDbContext context, IUserContext? userContex
 {
     /// <inheritdoc />
     public Task<TenantPlan?> GetForTenantAsync(Guid tenantId) =>
-        _dbSet.FirstOrDefaultAsync(tp => tp.TenantId == tenantId);
+        _dbSet.Include(tp => tp.Plan).FirstOrDefaultAsync(tp => tp.TenantId == tenantId);
 }

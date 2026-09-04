@@ -43,6 +43,7 @@ public class RustServersController
     private readonly IPlayerKillEventRepository _playerKillEventRepository;
     private readonly IServerInfoSnapshotRepository _serverInfoSnapshotRepository;
     private readonly IConnectionLogRepository _connectionLogRepository;
+    private readonly ITenantPlanRepository _tenantPlanRepository;
 
     public RustServersController(
         IRustServerRepository repository,
@@ -58,7 +59,8 @@ public class RustServersController
         IPlayerSessionRepository playerSessionRepository,
         IPlayerKillEventRepository playerKillEventRepository,
         IServerInfoSnapshotRepository serverInfoSnapshotRepository,
-        IConnectionLogRepository connectionLogRepository)
+        IConnectionLogRepository connectionLogRepository,
+        ITenantPlanRepository tenantPlanRepository)
         : base(repository, mapper, logger, correlationContext)
     {
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
@@ -71,6 +73,7 @@ public class RustServersController
         _playerKillEventRepository = playerKillEventRepository ?? throw new ArgumentNullException(nameof(playerKillEventRepository));
         _serverInfoSnapshotRepository = serverInfoSnapshotRepository ?? throw new ArgumentNullException(nameof(serverInfoSnapshotRepository));
         _connectionLogRepository = connectionLogRepository ?? throw new ArgumentNullException(nameof(connectionLogRepository));
+        _tenantPlanRepository = tenantPlanRepository ?? throw new ArgumentNullException(nameof(tenantPlanRepository));
     }
 
     /// <summary>
@@ -97,21 +100,45 @@ public class RustServersController
     }
 
     /// <summary>
-    /// Registers a new server, then publishes <see cref="ConnectToServer"/> so some live
-    /// <c>RustArchon.Worker</c> instance claims its connection immediately rather than waiting for
+    /// Registers a new server - rejected up front if the tenant's Plan already has as many servers as
+    /// <see cref="Plan.MaximumServers"/> allows - then publishes <see cref="ConnectToServer"/> so some
+    /// live <c>RustArchon.Worker</c> instance claims its connection immediately rather than waiting for
     /// the next claim-sweep interval.
     /// </summary>
     public override async Task<ActionResult<RustServerDto>> Create([FromBody] CreateRustServerDto createDto)
     {
+        var tenantId = await _tenantContext.GetCurrentTenantIdAsync();
+
+        // Checked here, not via OnBeforeCreate - that hook is synchronous (see ApiControllerBase),
+        // and both the tenant's Plan and its current server count need a real query. tenantId/plan
+        // missing entirely fails open (creation proceeds) rather than closed - every Organization is
+        // supposed to have exactly one TenantPlan from the moment it's created (see TenantPlan's
+        // remarks), so hitting either case here means something upstream is already broken; blocking
+        // a legitimate user's request on top of that would make a bad situation worse for no benefit.
+        if (tenantId is { } currentTenantId)
+        {
+            var tenantPlan = await _tenantPlanRepository.GetForTenantAsync(currentTenantId);
+            if (tenantPlan is not null)
+            {
+                // GetAllAsync(), not a dedicated count query - IRepository<T> has no CountAsync, and a
+                // tenant's server count is small enough (the seeded plans top out at 10) that pulling
+                // every row just to count them is cheap relative to everything else this endpoint
+                // already does.
+                var currentServerCount = (await _repository.GetAllAsync()).Count();
+                if (currentServerCount >= tenantPlan.Plan.MaximumServers)
+                {
+                    return BadRequest(
+                        $"Your plan ({tenantPlan.Plan.Name}) allows up to {tenantPlan.Plan.MaximumServers} server(s). " +
+                        "Upgrade your plan to add more.");
+                }
+            }
+        }
+
         var result = await base.Create(createDto);
 
-        if (result.Result is CreatedAtActionResult { Value: RustServerDto dto })
+        if (result.Result is CreatedAtActionResult { Value: RustServerDto dto } && tenantId is { } id)
         {
-            var tenantId = await _tenantContext.GetCurrentTenantIdAsync();
-            if (tenantId is { } id)
-            {
-                await _publishEndpoint.Publish(new ConnectToServer(dto.Id, id));
-            }
+            await _publishEndpoint.Publish(new ConnectToServer(dto.Id, id));
         }
 
         return result;
