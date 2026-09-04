@@ -10,8 +10,9 @@ namespace RustArchon.Api.Data;
 
 /// <summary>
 /// One periodic <c>serverinfo</c> poll snapshot for a server, capturing only the fields the Stats
-/// tab graphs over time - see <c>RustArchon.Messaging.Contracts.ServerInfoSnapshotCaptured</c>'s
-/// remarks for why the rest of <c>serverinfo</c>'s payload isn't persisted here at all.
+/// tab graphs over time - player count, network throughput, memory, and framerate. See
+/// <c>RustArchon.Messaging.Contracts.ServerInfoSnapshotCaptured</c>'s remarks for why the rest of
+/// <c>serverinfo</c>'s payload isn't persisted here at all.
 /// </summary>
 /// <remarks>
 /// Derives from <see cref="Entity"/>, not an auditable variant - like <see cref="PlayerSession"/>,
@@ -35,6 +36,7 @@ public class ServerInfoSnapshot : Entity, ITenantScoped
     public int NetworkIn { get; set; }
     public int NetworkOut { get; set; }
     public int Memory { get; set; }
+    public decimal Framerate { get; set; }
 
     public DateTimeOffset CapturedAtUtc { get; set; }
 }

@@ -63,6 +63,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// </summary>
     public DbSet<TenantPlan> TenantPlans { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the ConnectionLogEntry DbSet.
+    /// </summary>
+    public DbSet<ConnectionLogEntry> ConnectionLogEntries { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -42,6 +42,7 @@ public class RustServersController
     private readonly IPlayerSessionRepository _playerSessionRepository;
     private readonly IPlayerKillEventRepository _playerKillEventRepository;
     private readonly IServerInfoSnapshotRepository _serverInfoSnapshotRepository;
+    private readonly IConnectionLogRepository _connectionLogRepository;
 
     public RustServersController(
         IRustServerRepository repository,
@@ -56,7 +57,8 @@ public class RustServersController
         IRconEventRepository rconEventRepository,
         IPlayerSessionRepository playerSessionRepository,
         IPlayerKillEventRepository playerKillEventRepository,
-        IServerInfoSnapshotRepository serverInfoSnapshotRepository)
+        IServerInfoSnapshotRepository serverInfoSnapshotRepository,
+        IConnectionLogRepository connectionLogRepository)
         : base(repository, mapper, logger, correlationContext)
     {
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
@@ -68,6 +70,7 @@ public class RustServersController
         _playerSessionRepository = playerSessionRepository ?? throw new ArgumentNullException(nameof(playerSessionRepository));
         _playerKillEventRepository = playerKillEventRepository ?? throw new ArgumentNullException(nameof(playerKillEventRepository));
         _serverInfoSnapshotRepository = serverInfoSnapshotRepository ?? throw new ArgumentNullException(nameof(serverInfoSnapshotRepository));
+        _connectionLogRepository = connectionLogRepository ?? throw new ArgumentNullException(nameof(connectionLogRepository));
     }
 
     /// <summary>
@@ -454,9 +457,9 @@ public class RustServersController
     private static readonly TimeSpan MaxServerInfoHistoryRange = TimeSpan.FromDays(30);
 
     /// <summary>
-    /// Gets this server's <c>serverinfo</c> snapshot history (player count, network in/out, memory)
-    /// for the Stats tab's graphs, oldest first. Defaults to the last 24 hours when <paramref name="since"/>
-    /// is omitted.
+    /// Gets this server's <c>serverinfo</c> snapshot history (player count, network in/out, memory,
+    /// framerate) for the Stats tab's graphs, oldest first. Defaults to the last 24 hours when
+    /// <paramref name="since"/> is omitted.
     /// </summary>
     /// <param name="since">Only snapshots captured at or after this instant. Defaults to 24 hours ago.</param>
     /// <param name="until">Only snapshots captured at or before this instant. Defaults to now.</param>
@@ -483,6 +486,48 @@ public class RustServersController
 
         var snapshots = await _serverInfoSnapshotRepository.GetForServerAsync(id, sinceValue, untilValue);
         return Ok(_mapper.Map<IEnumerable<ServerInfoSnapshotDto>>(snapshots));
+    }
+
+    /// <summary>
+    /// The widest <c>since</c>/<c>until</c> range <see cref="GetConnectionLog"/> honors - same
+    /// reasoning as <see cref="MaxServerInfoHistoryRange"/>, kept as a separate constant since there is
+    /// no reason the two should have to change together.
+    /// </summary>
+    private static readonly TimeSpan MaxConnectionLogRange = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// Gets this server's Logs tab entries - both WebRCON connection-status transitions (connected,
+    /// lost, reconnecting, ...) and worker-side diagnostics that aren't one (a parse error, a poll
+    /// failure, ...), newest first - see <see cref="ConnectionLogEntry"/>'s remarks for why this exists
+    /// as its own append-only history rather than just the entity's current
+    /// <see cref="RustServer.ConnectionStatus"/> column. Defaults to the last 24 hours when
+    /// <paramref name="since"/> is omitted.
+    /// </summary>
+    /// <param name="since">Only entries at or after this instant. Defaults to 24 hours ago.</param>
+    /// <param name="until">Only entries at or before this instant. Defaults to now.</param>
+    [HttpGet("{id}/connection-log")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<IEnumerable<ConnectionLogEntryDto>>> GetConnectionLog(
+        Guid id,
+        [FromQuery] DateTimeOffset? since = null,
+        [FromQuery] DateTimeOffset? until = null)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        var untilValue = until ?? DateTimeOffset.UtcNow;
+        var sinceValue = since ?? untilValue - TimeSpan.FromHours(24);
+
+        if (untilValue - sinceValue > MaxConnectionLogRange)
+        {
+            sinceValue = untilValue - MaxConnectionLogRange;
+        }
+
+        var entries = await _connectionLogRepository.GetForServerAsync(id, sinceValue, untilValue);
+        return Ok(_mapper.Map<IEnumerable<ConnectionLogEntryDto>>(entries));
     }
 
     /// <summary>

@@ -29,6 +29,7 @@ public class ServerInfoSnapshotCapturedConsumer(IServerInfoSnapshotRepository re
             NetworkIn = message.NetworkIn,
             NetworkOut = message.NetworkOut,
             Memory = message.Memory,
+            Framerate = message.Framerate,
             CapturedAtUtc = message.CapturedAtUtc
         });
     }
