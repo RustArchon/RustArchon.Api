@@ -43,6 +43,7 @@ public class RustServersController
     private readonly IPlayerKillEventRepository _playerKillEventRepository;
     private readonly IServerInfoSnapshotRepository _serverInfoSnapshotRepository;
     private readonly IConnectionLogRepository _connectionLogRepository;
+    private readonly ITenantPlanRepository _tenantPlanRepository;
 
     public RustServersController(
         IRustServerRepository repository,
@@ -58,7 +59,8 @@ public class RustServersController
         IPlayerSessionRepository playerSessionRepository,
         IPlayerKillEventRepository playerKillEventRepository,
         IServerInfoSnapshotRepository serverInfoSnapshotRepository,
-        IConnectionLogRepository connectionLogRepository)
+        IConnectionLogRepository connectionLogRepository,
+        ITenantPlanRepository tenantPlanRepository)
         : base(repository, mapper, logger, correlationContext)
     {
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
@@ -71,6 +73,7 @@ public class RustServersController
         _playerKillEventRepository = playerKillEventRepository ?? throw new ArgumentNullException(nameof(playerKillEventRepository));
         _serverInfoSnapshotRepository = serverInfoSnapshotRepository ?? throw new ArgumentNullException(nameof(serverInfoSnapshotRepository));
         _connectionLogRepository = connectionLogRepository ?? throw new ArgumentNullException(nameof(connectionLogRepository));
+        _tenantPlanRepository = tenantPlanRepository ?? throw new ArgumentNullException(nameof(tenantPlanRepository));
     }
 
     /// <summary>
@@ -97,25 +100,93 @@ public class RustServersController
     }
 
     /// <summary>
-    /// Registers a new server, then publishes <see cref="ConnectToServer"/> so some live
-    /// <c>RustArchon.Worker</c> instance claims its connection immediately rather than waiting for
+    /// Registers a new server - rejected up front if the tenant's Plan already has as many servers as
+    /// <see cref="Plan.MaximumServers"/> allows - then publishes <see cref="ConnectToServer"/> so some
+    /// live <c>RustArchon.Worker</c> instance claims its connection immediately rather than waiting for
     /// the next claim-sweep interval.
     /// </summary>
+    /// <remarks>
+    /// The authoritative check - see <see cref="GetPlanLimit"/> for the same limits exposed as a
+    /// read-only, non-blocking heads-up the Panel checks before it even shows the Add Server form.
+    /// That endpoint's answer can be stale by the time a user submits (another tab adding a server in
+    /// the meantime, say); this one can't, since it and the actual insert run in the same request.
+    /// </remarks>
     public override async Task<ActionResult<RustServerDto>> Create([FromBody] CreateRustServerDto createDto)
     {
+        var status = await GetPlanLimitStatusAsync();
+
+        // Plan missing entirely fails open (creation proceeds) rather than closed - every
+        // Organization is supposed to have exactly one TenantPlan from the moment it's created (see
+        // TenantPlan's remarks), so hitting this means something upstream is already broken;
+        // blocking a legitimate user's request on top of that would make a bad situation worse for
+        // no benefit.
+        if (status.Plan is { } plan && status.CurrentServerCount >= plan.MaximumServers)
+        {
+            return BadRequest(PlanLimitMessage(plan));
+        }
+
         var result = await base.Create(createDto);
 
-        if (result.Result is CreatedAtActionResult { Value: RustServerDto dto })
+        if (result.Result is CreatedAtActionResult { Value: RustServerDto dto } && status.TenantId is { } id)
         {
-            var tenantId = await _tenantContext.GetCurrentTenantIdAsync();
-            if (tenantId is { } id)
-            {
-                await _publishEndpoint.Publish(new ConnectToServer(dto.Id, id));
-            }
+            await _publishEndpoint.Publish(new ConnectToServer(dto.Id, id));
         }
 
         return result;
     }
+
+    /// <summary>
+    /// Gets the calling tenant's current Plan limits and how many servers they currently have - lets
+    /// the Panel warn "you're at your limit" the moment a user clicks Add Server, before they've
+    /// filled out the whole form, instead of only after submitting it and having <see cref="Create"/>
+    /// reject it. Purely informational - see <see cref="Create"/>'s remarks for why this can't replace
+    /// its own check.
+    /// </summary>
+    [HttpGet("plan-limit")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<ServerPlanLimitDto>> GetPlanLimit()
+    {
+        var status = await GetPlanLimitStatusAsync();
+
+        return Ok(new ServerPlanLimitDto
+        {
+            PlanName = status.Plan?.Name,
+            MaximumServers = status.Plan?.MaximumServers,
+            CurrentServerCount = status.CurrentServerCount
+        });
+    }
+
+    /// <summary>
+    /// Resolves the calling tenant's current Plan (if any - see <see cref="TenantPlan"/>'s remarks on
+    /// why a tenant might genuinely have none) and how many non-deleted servers it currently owns,
+    /// shared by <see cref="Create"/>'s enforcement and <see cref="GetPlanLimit"/>'s read-only view of
+    /// the exact same numbers.
+    /// </summary>
+    private async Task<PlanLimitStatus> GetPlanLimitStatusAsync()
+    {
+        var tenantId = await _tenantContext.GetCurrentTenantIdAsync();
+
+        // No ambient tenant at all (shouldn't happen for an authenticated, EntityAuthorize-gated
+        // request, but nothing here depends on that guarantee) - nothing to look up.
+        if (tenantId is not { } currentTenantId)
+        {
+            return new PlanLimitStatus(null, null, 0);
+        }
+
+        var tenantPlan = await _tenantPlanRepository.GetForTenantAsync(currentTenantId);
+
+        // GetAllAsync(), not a dedicated count query - IRepository<T> has no CountAsync, and a
+        // tenant's server count is small enough (the seeded plans top out at 10) that pulling every
+        // row just to count them is cheap relative to everything else these two callers already do.
+        var currentServerCount = (await _repository.GetAllAsync()).Count();
+
+        return new PlanLimitStatus(currentTenantId, tenantPlan?.Plan, currentServerCount);
+    }
+
+    private static string PlanLimitMessage(Plan plan) =>
+        $"Your plan ({plan.Name}) allows up to {plan.MaximumServers} server(s). Upgrade your plan to add more.";
+
+    private sealed record PlanLimitStatus(Guid? TenantId, Plan? Plan, int CurrentServerCount);
 
     /// <summary>
     /// Updates an existing server. <see cref="UpdateRustServerDto.RconPassword"/> is optional -
