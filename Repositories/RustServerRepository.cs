@@ -49,16 +49,35 @@ public class RustServerRepository(ApiDbContext context, IUserContext? userContex
             .ToListAsync();
     }
 
+    // Matches RustServer.ConnectionStatusDetail's [MaxLength(200)] - see TryApplyConnectionStatusAsync's
+    // remarks for why this exists at all.
+    private const int ConnectionStatusDetailMaxLength = 200;
+
     /// <inheritdoc />
     public async Task<bool> TryApplyConnectionStatusAsync(
         Guid serverId, RconConnectionStatus status, string? detail, DateTimeOffset changedAtUtc)
     {
+        // Truncated to fit the column - ExecuteUpdateAsync issues a raw UPDATE with no EF-side
+        // validation of RustServer's [MaxLength(200)] attribute, so an over-length detail reached
+        // Postgres directly and threw (22001: value too long for type character varying(200)),
+        // unhandled, right here. Confirmed live: several servers with unreachable hosts/a bogus
+        // hostname produced a real disconnect exception message (see RustWebRconClient.Socket_OnClose's
+        // remarks on surfacing the innermost exception) long enough to trip this - and because this
+        // call runs before ConnectionStatusConsumer ever gets to persist a ConnectionLogEntry, the
+        // unhandled exception took the log entry down with it. ConnectionStatusDetail is only ever a
+        // short glance-value anyway (the header badge's tooltip, the servers list) - the untruncated
+        // detail still reaches ConnectionLogEntry.Message (an unbounded text column) once this no
+        // longer throws before that write runs.
+        var truncatedDetail = detail is { Length: > ConnectionStatusDetailMaxLength }
+            ? string.Concat(detail.AsSpan(0, ConnectionStatusDetailMaxLength - 3), "...")
+            : detail;
+
         var affected = await _dbSet
             .Where(server => server.Id == serverId
                 && (server.ConnectionStatusChangedAtUtc == null || server.ConnectionStatusChangedAtUtc <= changedAtUtc))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(server => server.ConnectionStatus, status)
-                .SetProperty(server => server.ConnectionStatusDetail, detail)
+                .SetProperty(server => server.ConnectionStatusDetail, truncatedDetail)
                 .SetProperty(server => server.ConnectionStatusChangedAtUtc, changedAtUtc));
 
         return affected > 0;
