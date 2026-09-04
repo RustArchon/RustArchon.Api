@@ -360,6 +360,13 @@ using (var migrationScope = app.Services.CreateScope())
     // Plan rows exist yet at all.
     await PlanSeeder.EnsureDefaultsAsync(
         dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See TenantPlanBackfiller's remarks - assigns the default (or cheapest active) Plan to any
+    // Tenant that predates the Plan system, or otherwise fell through AccountBootstrapController's
+    // normal assign-on-create path. Run last: depends on both the DefaultPlanId setting (seeded just
+    // above) and at least one Plan existing (seeded just above that) to have anything to assign.
+    await TenantPlanBackfiller.EnsureAllTenantsHavePlanAsync(
+        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 }
 
 // ============================================
