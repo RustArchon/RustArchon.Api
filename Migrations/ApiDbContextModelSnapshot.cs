@@ -17,7 +17,7 @@ namespace RustArchon.Api.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.10")
+                .HasAnnotation("ProductVersion", "10.0.11")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -58,6 +58,11 @@ namespace RustArchon.Api.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasDatabaseName("IX_Role_Name_WhereGlobal")
+                        .HasFilter("\"TenantId\" IS NULL");
 
                     b.HasIndex(new[] { "TenantId", "Name" }, "IX_Role_TenantId_Name")
                         .IsUnique();
@@ -238,6 +243,71 @@ namespace RustArchon.Api.Migrations
                     b.HasIndex(new[] { "IsActive" }, "IX_Tenant_IsActive");
 
                     b.ToTable("Tenant");
+                });
+
+            modelBuilder.Entity("JumpStart.Data.TenantInvitation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AcceptedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("AcceptedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("DeletedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)");
+
+                    b.Property<DateTimeOffset>("ExpiresOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ModifiedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ModifiedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("RevokedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("RevokedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("RoleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Token")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Token")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Email");
+
+                    b.ToTable("TenantInvitation");
                 });
 
             modelBuilder.Entity("JumpStart.Data.UserTenant", b =>
@@ -691,6 +761,25 @@ namespace RustArchon.Api.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("FriendlyName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Xml")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("DataProtectionKeys");
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.ConnectionLogEntry", b =>
                 {
                     b.Property<Guid>("Id")
@@ -722,6 +811,43 @@ namespace RustArchon.Api.Migrations
                         .IsDescending(false, false, true);
 
                     b.ToTable("ConnectionLogEntry");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.CreditNote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<Guid?>("AppliedToInvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("char(3)");
+
+                    b.Property<DateTimeOffset>("IssuedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AppliedToInvoiceId");
+
+                    b.HasIndex("TenantId")
+                        .HasDatabaseName("IX_CreditNote_TenantId");
+
+                    b.ToTable("CreditNote");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.InvitationCode", b =>
@@ -779,6 +905,233 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("InvitationCode");
                 });
 
+            modelBuilder.Entity("RustArchon.Api.Data.Invoice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("AmountCredited")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("AmountPaid")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("char(3)");
+
+                    b.Property<DateTimeOffset?>("DueOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("IssuedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Number")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("ProviderInvoiceId")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("Subtotal")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("TaxTotal")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Total")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTimeOffset?>("VoidedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("WrittenOffOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DueOn")
+                        .HasDatabaseName("IX_Invoice_DueOn_WhereOpen")
+                        .HasFilter("\"Status\" = 1");
+
+                    b.HasIndex("Number")
+                        .IsUnique()
+                        .HasDatabaseName("IX_Invoice_Number_WhereNumbered")
+                        .HasFilter("\"Number\" IS NOT NULL");
+
+                    b.HasIndex("TenantId", "DueOn")
+                        .HasDatabaseName("IX_Invoice_TenantId_DueOn_WhereOpen")
+                        .HasFilter("\"Status\" = 1");
+
+                    b.ToTable("Invoice");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.InvoiceLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("ServiceEnd")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("ServiceStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SubscriptionPeriodId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("TaxAmount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("UnitAmount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InvoiceId")
+                        .HasDatabaseName("IX_InvoiceLine_InvoiceId");
+
+                    b.HasIndex("SubscriptionPeriodId")
+                        .HasDatabaseName("IX_InvoiceLine_SubscriptionPeriodId");
+
+                    b.ToTable("InvoiceLine");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.InvoiceNumberSequence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<long>("NextValue")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("PadWidth")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Prefix")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Scope")
+                        .IsUnique()
+                        .HasDatabaseName("IX_InvoiceNumberSequence_Scope");
+
+                    b.ToTable("InvoiceNumberSequence");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Payment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("char(3)");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("FailureMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("Method")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ProviderPaymentId")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTimeOffset>("ReceivedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ReceivedOn")
+                        .HasDatabaseName("IX_Payment_TenantId_ReceivedOn");
+
+                    b.ToTable("Payment");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.PaymentAllocation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("AllocatedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PaymentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ReversedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InvoiceId")
+                        .HasDatabaseName("IX_PaymentAllocation_InvoiceId");
+
+                    b.HasIndex("PaymentId")
+                        .HasDatabaseName("IX_PaymentAllocation_PaymentId");
+
+                    b.ToTable("PaymentAllocation");
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.Plan", b =>
                 {
                     b.Property<Guid>("Id")
@@ -787,9 +1140,6 @@ namespace RustArchon.Api.Migrations
 
                     b.Property<bool>("Active")
                         .HasColumnType("boolean");
-
-                    b.Property<decimal>("AnnualPrice")
-                        .HasColumnType("numeric(18,2)");
 
                     b.Property<string>("ColorCode")
                         .IsRequired()
@@ -810,7 +1160,7 @@ namespace RustArchon.Api.Migrations
                     b.Property<bool>("HasRoles")
                         .HasColumnType("boolean");
 
-                    b.Property<int>("MaximumServers")
+                    b.Property<int?>("MaximumServers")
                         .HasColumnType("integer");
 
                     b.Property<int>("MaximumUsers")
@@ -822,15 +1172,15 @@ namespace RustArchon.Api.Migrations
                     b.Property<DateTimeOffset?>("ModifiedOn")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<decimal>("MonthlyPrice")
-                        .HasColumnType("numeric(18,2)");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<decimal>("QuarterlyPrice")
-                        .HasColumnType("numeric(18,2)");
+                    b.Property<bool>("OnePerOwner")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("PricingModel")
+                        .HasColumnType("integer");
 
                     b.Property<int>("RetentionHistory")
                         .HasColumnType("integer");
@@ -843,6 +1193,40 @@ namespace RustArchon.Api.Migrations
                         .HasFilter("\"Active\"");
 
                     b.ToTable("Plan");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.PlanPrice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("BaseAmount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("char(3)");
+
+                    b.Property<int>("IncludedUnits")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TermMonths")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("UnitAmount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PlanId", "TermMonths")
+                        .IsUnique()
+                        .HasDatabaseName("IX_PlanPrice_PlanId_TermMonths");
+
+                    b.ToTable("PlanPrice");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.PlatformSetting", b =>
@@ -1141,6 +1525,52 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("RustServer");
                 });
 
+            modelBuilder.Entity("RustArchon.Api.Data.ScheduledPlanChange", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("AppliedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("CancelledOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("CreatedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("EffectiveDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TermMonths")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EffectiveDate")
+                        .HasDatabaseName("IX_ScheduledPlanChange_EffectiveDate_WherePending")
+                        .HasFilter("\"AppliedOn\" IS NULL AND \"CancelledOn\" IS NULL");
+
+                    b.HasIndex("PlanId");
+
+                    b.HasIndex("TenantId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_ScheduledPlanChange_TenantId_WherePending")
+                        .HasFilter("\"AppliedOn\" IS NULL AND \"CancelledOn\" IS NULL");
+
+                    b.ToTable("ScheduledPlanChange");
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.ServerInfoSnapshot", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1182,17 +1612,32 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("ServerInfoSnapshot");
                 });
 
-            modelBuilder.Entity("RustArchon.Api.Data.TenantPlan", b =>
+            modelBuilder.Entity("RustArchon.Api.Data.Subscription", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<DateTimeOffset>("AssignedAtUtc")
+                    b.Property<DateTimeOffset?>("EndDate")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("PlanId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("StartDate")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("StatusChangedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("StatusReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
@@ -1201,10 +1646,53 @@ namespace RustArchon.Api.Migrations
 
                     b.HasIndex("PlanId");
 
-                    b.HasIndex(new[] { "TenantId" }, "IX_TenantPlan_TenantId")
-                        .IsUnique();
+                    b.HasIndex("TenantId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_Subscription_TenantId_WhereCurrent")
+                        .HasFilter("\"EndDate\" IS NULL");
 
-                    b.ToTable("TenantPlan");
+                    b.HasIndex("TenantId", "StartDate")
+                        .HasDatabaseName("IX_Subscription_TenantId_StartDate");
+
+                    b.ToTable("Subscription");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.SubscriptionPeriod", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("EarnedAmount")
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<DateTimeOffset>("EndDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("PeriodEnd")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("PeriodStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("StartDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("SubscriptionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("TermMonths")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubscriptionId", "StartDate")
+                        .HasDatabaseName("IX_SubscriptionPeriod_SubscriptionId_StartDate");
+
+                    b.ToTable("SubscriptionPeriod");
                 });
 
             modelBuilder.Entity("JumpStart.Authorization.Role", b =>
@@ -1249,6 +1737,17 @@ namespace RustArchon.Api.Migrations
                         .HasForeignKey("TenantId");
 
                     b.Navigation("Role");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("JumpStart.Data.TenantInvitation", b =>
+                {
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.Navigation("Tenant");
                 });
@@ -1354,6 +1853,93 @@ namespace RustArchon.Api.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("RustArchon.Api.Data.CreditNote", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.Invoice", "AppliedToInvoice")
+                        .WithMany()
+                        .HasForeignKey("AppliedToInvoiceId");
+
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AppliedToInvoice");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Invoice", b =>
+                {
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.InvoiceLine", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.Invoice", "Invoice")
+                        .WithMany("Lines")
+                        .HasForeignKey("InvoiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RustArchon.Api.Data.SubscriptionPeriod", "SubscriptionPeriod")
+                        .WithMany()
+                        .HasForeignKey("SubscriptionPeriodId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Invoice");
+
+                    b.Navigation("SubscriptionPeriod");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Payment", b =>
+                {
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.PaymentAllocation", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.Invoice", "Invoice")
+                        .WithMany()
+                        .HasForeignKey("InvoiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RustArchon.Api.Data.Payment", "Payment")
+                        .WithMany("Allocations")
+                        .HasForeignKey("PaymentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Invoice");
+
+                    b.Navigation("Payment");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.PlanPrice", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.Plan", "Plan")
+                        .WithMany("Prices")
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Plan");
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.PlayerKillEvent", b =>
                 {
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
@@ -1398,18 +1984,7 @@ namespace RustArchon.Api.Migrations
                     b.Navigation("Tenant");
                 });
 
-            modelBuilder.Entity("RustArchon.Api.Data.ServerInfoSnapshot", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.TenantPlan", b =>
+            modelBuilder.Entity("RustArchon.Api.Data.ScheduledPlanChange", b =>
                 {
                     b.HasOne("RustArchon.Api.Data.Plan", "Plan")
                         .WithMany()
@@ -1426,6 +2001,47 @@ namespace RustArchon.Api.Migrations
                     b.Navigation("Plan");
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.ServerInfoSnapshot", b =>
+                {
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Subscription", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.Plan", "Plan")
+                        .WithMany()
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Plan");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.SubscriptionPeriod", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.Subscription", "Subscription")
+                        .WithMany("Periods")
+                        .HasForeignKey("SubscriptionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Subscription");
                 });
 
             modelBuilder.Entity("JumpStart.Authorization.Role", b =>
@@ -1472,6 +2088,26 @@ namespace RustArchon.Api.Migrations
             modelBuilder.Entity("JumpStart.Forms.QuestionType", b =>
                 {
                     b.Navigation("Questions");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Invoice", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Payment", b =>
+                {
+                    b.Navigation("Allocations");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Plan", b =>
+                {
+                    b.Navigation("Prices");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.Subscription", b =>
+                {
+                    b.Navigation("Periods");
                 });
 #pragma warning restore 612, 618
         }

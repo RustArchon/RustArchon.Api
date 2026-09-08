@@ -4,10 +4,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using JumpStart.Data;
 using JumpStart.Repositories;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Data;
 using RustArchon.Messaging.Contracts;
+using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Repositories;
 
@@ -26,26 +28,37 @@ public class RustServerRepository(ApiDbContext context, IUserContext? userContex
     /// <inheritdoc />
     public async Task<RustServer?> GetByIdAcrossTenantsAsync(Guid id)
     {
-        // IgnoreQueryFilters() strips both the tenant-scoping filter and the soft-delete filter that
-        // every other query on this DbSet gets automatically - the DeletedOn check has to be added
-        // back by hand, same pattern as the one other intentionally-cross-tenant read in this codebase
-        // (InvitationCodeRepository.TryRedeemAsync).
+        // Deliberately crosses the tenant boundary - a worker claiming a connection has no ambient
+        // tenant. AcrossAllTenants drops only the tenant filter, so soft-deleted servers stay hidden
+        // without a hand-written DeletedOn check (which is what this used to need, and what every
+        // cross-tenant read in this codebase used to have to remember).
         return await _dbSet
-            .IgnoreQueryFilters()
-            .Where(server => server.DeletedOn == null && server.IsEnabled)
+            .AcrossAllTenants()
+            .Where(server => server.IsEnabled)
             .FirstOrDefaultAsync(server => server.Id == id);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<RustServer>> GetServersNeedingClaimAsync(DateTimeOffset staleBefore)
     {
-        // IgnoreQueryFilters() for the same reason as GetByIdAcrossTenantsAsync above - this sweep
-        // spans every tenant by design, not just whichever one (if any) happens to be ambient.
-        return await _dbSet
-            .IgnoreQueryFilters()
-            .Where(server => server.DeletedOn == null
-                && server.IsEnabled
-                && (server.LastHeartbeatUtc == null || server.LastHeartbeatUtc < staleBefore))
+        // Same reason as GetByIdAcrossTenantsAsync above - this sweep spans every tenant by design,
+        // not just whichever one (if any) happens to be ambient.
+        //
+        // Suspended and cancelled Organizations are excluded, and this is the only thing that makes
+        // suspension hold. Suspending publishes a teardown per server, but every server it just stopped
+        // still has IsEnabled true (deliberately - that field is the customer's intent, see
+        // IOrganizationLifecycleService) and a stale heartbeat, which is precisely this query's
+        // definition of "needs claiming". Without the exclusion the sweep would hand every suspended
+        // connection straight back within one interval, and the suspension would appear to work for
+        // about a minute.
+        return await context.Set<RustServer>()
+            .AcrossAllTenants()
+            .Where(server => server.IsEnabled
+                && (server.LastHeartbeatUtc == null || server.LastHeartbeatUtc < staleBefore)
+                && !context.Set<Subscription>().Any(s =>
+                    s.TenantId == server.TenantId
+                    && s.EndDate == null
+                    && (s.Status == SubscriptionStatus.Suspended || s.Status == SubscriptionStatus.Cancelled)))
             .ToListAsync();
     }
 

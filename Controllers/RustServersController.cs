@@ -43,7 +43,7 @@ public class RustServersController
     private readonly IPlayerKillEventRepository _playerKillEventRepository;
     private readonly IServerInfoSnapshotRepository _serverInfoSnapshotRepository;
     private readonly IConnectionLogRepository _connectionLogRepository;
-    private readonly ITenantPlanRepository _tenantPlanRepository;
+    private readonly ISubscriptionRepository _subscriptionRepository;
 
     public RustServersController(
         IRustServerRepository repository,
@@ -60,7 +60,7 @@ public class RustServersController
         IPlayerKillEventRepository playerKillEventRepository,
         IServerInfoSnapshotRepository serverInfoSnapshotRepository,
         IConnectionLogRepository connectionLogRepository,
-        ITenantPlanRepository tenantPlanRepository)
+        ISubscriptionRepository subscriptionRepository)
         : base(repository, mapper, logger, correlationContext)
     {
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
@@ -73,7 +73,7 @@ public class RustServersController
         _playerKillEventRepository = playerKillEventRepository ?? throw new ArgumentNullException(nameof(playerKillEventRepository));
         _serverInfoSnapshotRepository = serverInfoSnapshotRepository ?? throw new ArgumentNullException(nameof(serverInfoSnapshotRepository));
         _connectionLogRepository = connectionLogRepository ?? throw new ArgumentNullException(nameof(connectionLogRepository));
-        _tenantPlanRepository = tenantPlanRepository ?? throw new ArgumentNullException(nameof(tenantPlanRepository));
+        _subscriptionRepository = subscriptionRepository ?? throw new ArgumentNullException(nameof(subscriptionRepository));
     }
 
     /// <summary>
@@ -100,29 +100,38 @@ public class RustServersController
     }
 
     /// <summary>
-    /// Registers a new server - rejected up front if the tenant's Plan already has as many servers as
-    /// <see cref="Plan.MaximumServers"/> allows - then publishes <see cref="ConnectToServer"/> so some
-    /// live <c>RustArchon.Worker</c> instance claims its connection immediately rather than waiting for
-    /// the next claim-sweep interval.
+    /// Registers a new server - rejected up front if the tenant has no unused server slot - then
+    /// publishes <see cref="ConnectToServer"/> so some live <c>RustArchon.Worker</c> instance claims its
+    /// connection immediately rather than waiting for the next claim-sweep interval.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The authoritative check - see <see cref="GetPlanLimit"/> for the same limits exposed as a
     /// read-only, non-blocking heads-up the Panel checks before it even shows the Add Server form.
     /// That endpoint's answer can be stale by the time a user submits (another tab adding a server in
     /// the meantime, say); this one can't, since it and the actual insert run in the same request.
+    /// </para>
+    /// <para>
+    /// <strong>Checked against bought capacity, not against <see cref="Plan.MaximumServers"/>.</strong>
+    /// Entitlement is purchased deliberately (see <see cref="SubscriptionPeriod.Quantity"/>) and servers
+    /// consume it, so the plan's ceiling is now an upper bound on what may be <em>bought</em> rather than
+    /// the limit checked here. On a flat tier the two coincide - quantity is pinned to the plan's
+    /// included units - so nothing changes for existing subscribers; on a per-server plan, which has no
+    /// ceiling at all, the old check compared against null and let every request through.
+    /// </para>
     /// </remarks>
     public override async Task<ActionResult<RustServerDto>> Create([FromBody] CreateRustServerDto createDto)
     {
         var status = await GetPlanLimitStatusAsync();
 
         // Plan missing entirely fails open (creation proceeds) rather than closed - every
-        // Organization is supposed to have exactly one TenantPlan from the moment it's created (see
-        // TenantPlan's remarks), so hitting this means something upstream is already broken;
+        // Organization is supposed to have exactly one Subscription from the moment it's created (see
+        // Subscription's remarks), so hitting this means something upstream is already broken;
         // blocking a legitimate user's request on top of that would make a bad situation worse for
-        // no benefit.
-        if (status.Plan is { } plan && status.CurrentServerCount >= plan.MaximumServers)
+        // no benefit. Same for a subscription with no current billing period.
+        if (status.Plan is { } plan && status.Quantity is { } slots && status.CurrentServerCount >= slots)
         {
-            return BadRequest(PlanLimitMessage(plan));
+            return BadRequest(CapacityMessage(plan, slots));
         }
 
         var result = await base.Create(createDto);
@@ -152,12 +161,14 @@ public class RustServersController
         {
             PlanName = status.Plan?.Name,
             MaximumServers = status.Plan?.MaximumServers,
-            CurrentServerCount = status.CurrentServerCount
+            CurrentServerCount = status.CurrentServerCount,
+            Quantity = status.Quantity,
+            CanBuyCapacity = status.CanBuyCapacity
         });
     }
 
     /// <summary>
-    /// Resolves the calling tenant's current Plan (if any - see <see cref="TenantPlan"/>'s remarks on
+    /// Resolves the calling tenant's current Plan (if any - see <see cref="Subscription"/>'s remarks on
     /// why a tenant might genuinely have none) and how many non-deleted servers it currently owns,
     /// shared by <see cref="Create"/>'s enforcement and <see cref="GetPlanLimit"/>'s read-only view of
     /// the exact same numbers.
@@ -170,23 +181,38 @@ public class RustServersController
         // request, but nothing here depends on that guarantee) - nothing to look up.
         if (tenantId is not { } currentTenantId)
         {
-            return new PlanLimitStatus(null, null, 0);
+            return new PlanLimitStatus(null, null, 0, null, false);
         }
 
-        var tenantPlan = await _tenantPlanRepository.GetForTenantAsync(currentTenantId);
+        var subscription = await _subscriptionRepository.GetForTenantAsync(currentTenantId);
+
+        // The billing period in force is what carries the bought capacity. Null when a subscription
+        // somehow has no open period, which the caller treats as "no limit known" and fails open on.
+        var currentTerm = await _subscriptionRepository.GetCurrentTermAsync(currentTenantId);
 
         // GetAllAsync(), not a dedicated count query - IRepository<T> has no CountAsync, and a
         // tenant's server count is small enough (the seeded plans top out at 10) that pulling every
         // row just to count them is cheap relative to everything else these two callers already do.
         var currentServerCount = (await _repository.GetAllAsync()).Count();
 
-        return new PlanLimitStatus(currentTenantId, tenantPlan?.Plan, currentServerCount);
+        // Capacity is only purchasable where a slot actually costs something - on a flat tier the unit
+        // amount is zero and quantity is pinned to what the plan includes, so "buy more" is the wrong
+        // thing to offer. Mirrors SubscriptionService.ResolveQuantity.
+        var price = currentTerm is null
+            ? null
+            : subscription?.Plan.Prices.FirstOrDefault(p => p.TermMonths == currentTerm.TermMonths);
+
+        return new PlanLimitStatus(
+            currentTenantId, subscription?.Plan, currentServerCount, currentTerm?.Quantity,
+            price is { UnitAmount: > 0m });
     }
 
-    private static string PlanLimitMessage(Plan plan) =>
-        $"Your plan ({plan.Name}) allows up to {plan.MaximumServers} server(s). Upgrade your plan to add more.";
+    private static string CapacityMessage(Plan plan, int slots) =>
+        $"You're using all {slots} of your server slot(s) on the {plan.Name} plan. "
+        + "Buy more capacity, or upgrade your plan, to add another.";
 
-    private sealed record PlanLimitStatus(Guid? TenantId, Plan? Plan, int CurrentServerCount);
+    private sealed record PlanLimitStatus(
+        Guid? TenantId, Plan? Plan, int CurrentServerCount, int? Quantity, bool CanBuyCapacity);
 
     /// <summary>
     /// Updates an existing server. <see cref="UpdateRustServerDto.RconPassword"/> is optional -

@@ -7,9 +7,12 @@ using MassTransit;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using RustArchon.Api.Administration;
+using RustArchon.Api.Billing;
 using RustArchon.Api.Data;
 using RustArchon.Api.Hubs;
 using RustArchon.Api.Infrastructure;
@@ -19,6 +22,7 @@ using RustArchon.Api.Infrastructure.Geolocation.Providers;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Infrastructure.Steam;
 using RustArchon.Api.Messaging;
+using RustArchon.Api.Reporting;
 using RustArchon.Api.Repositories;
 using RustArchon.Api.Services;
 using RustArchon.Messaging.Contracts;
@@ -45,8 +49,16 @@ builder.Services.AddJumpStart(options =>
     options.RegisterTenantContext<JwtTenantContext>();
     options.AutoDiscoverRepositories = true; // required for EnsureDbContextResolution
     options.ScanAssembly(typeof(Program).Assembly);
-    options.RegisterAuthorizationController = true; // Roles/UserPermissions CRUD - also registers
-                                                      // IRoleRepository, used by AccountBootstrapController
+    // Services only - deliberately NOT RegisterAuthorizationController. That flag additionally
+    // publishes /api/roles and /api/userpermissions as a live CRUD surface, which this application
+    // never wanted; it was set purely to obtain IRoleRepository, which the two are no longer coupled
+    // (JumpStart ADR-019 §5). Role administration will be served from RustArchon's own controller,
+    // with its own rules.
+    options.RegisterAuthorizationRepositories = true;
+
+    // The closed set of permissions this application supports. A grant of anything not in here is
+    // refused by the repository, whatever route it arrives by. See PermissionCatalog and ADR-019.
+    options.DeclarePermissions(PermissionCatalog.All);
     options.RegisterTokenController = true;          // POST /api/token/exchange
     options.RegisterTenantsController = true;        // Tenant CRUD + membership - also registers
                                                       // ITenantRepository/IUserTenantRepository
@@ -62,19 +74,11 @@ builder.Services.AddJumpStartAutoMapper(
 // ============================================
 // 4. RCON CREDENTIAL PROTECTION
 // ============================================
-// The Data Protection key ring is persisted to disk rather than left at .NET's default per-machine
-// profile - a container can be recreated at any time, and without a persisted key ring every
-// previously-encrypted RconPassword becomes permanently undecryptable the moment that happens.
-// DataProtection:KeyPath defaults to a local folder for non-Docker dev; the Docker Compose setup
-// points it at a named volume (/keys) instead. This only covers a single API instance/volume - see
-// the README for what changes once RustArchon.Api is ever scaled to more than one replica.
-var dataProtectionKeyPath = builder.Configuration["DataProtection:KeyPath"]
-    ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data", "dataprotection-keys");
-Directory.CreateDirectory(dataProtectionKeyPath);
-
+// The Data Protection key ring is now persisted to the database rather than using local file system
+// storage - this enables horizontal scaling across multiple instances.
 builder.Services.AddDataProtection()
     .SetApplicationName("RustArchon")
-    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyPath));
+    .PersistKeysToDbContext<ApiDbContext>();
 builder.Services.AddScoped<IRconCredentialProtector, RconCredentialProtector>();
 
 // ============================================
@@ -181,6 +185,95 @@ builder.Services.AddHostedService<ServerClaimSweepService>();
 builder.Services.AddSignalR();
 
 // ============================================
+// 4d. SUBSCRIPTIONS / BILLING
+// ============================================
+// TimeProvider rather than DateTimeOffset.UtcNow inside the billing code: proration is arithmetic on
+// dates, and being able to hand it a fixed instant is what makes the plan-change rules testable
+// without waiting a month for a period to roll over.
+// ...and, on a `--seed-demo` run in Development, that same seam is what lets the demo generator replay
+// two years of real billing at historical instants instead of hand-writing rows. See DemoDataSeeder.
+if (DemoDataSeeder.IsRequested(builder.Environment, builder.Configuration))
+{
+    builder.Services.AddSingleton<TimeProvider>(new SimulatedClock(DateTimeOffset.UtcNow));
+}
+else
+{
+    builder.Services.AddSingleton(TimeProvider.System);
+}
+
+builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
+
+// The single crossing from revenue earned to money asked for. Scoped alongside the subscription
+// service because it shares that service's DbContext - and therefore its transaction, which is what
+// lets a rolled-back plan change release the invoice number it took rather than burning it.
+builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+
+// Settling those invoices: payments, allocation, credit notes, void and write-off. Manual entry only
+// today - a provider adapter calls these same methods rather than inventing a second path to the tables.
+builder.Services.AddScoped<IPaymentService, PaymentService>();
+
+// Applies scheduled (deferred) plan changes and rolls billing periods over when they end. Load-bearing
+// rather than housekeeping - every downgrade is deferred, so without this they'd never take effect.
+builder.Services.AddHostedService<SubscriptionScheduleService>();
+
+// ============================================
+// 4e. REPORTING
+// ============================================
+// Cross-tenant operational reports (ReportsController, gated by ViewReports). Separate from
+// ISubscriptionService above, which only ever answers for one tenant at a time.
+builder.Services.AddScoped<IReportingService, ReportingService>();
+
+// The site-admin view of one customer, and the support actions on their servers. Cross-tenant like the
+// reports above, but reaching into an individual account rather than aggregating over all of them -
+// hence its own permission. See IOrganizationAdminService.
+builder.Services.AddScoped<IOrganizationAdminService, OrganizationAdminService>();
+builder.Services.AddScoped<IOrganizationServerAdminService, OrganizationServerAdminService>();
+
+// Membership, roles within an Organization, and the platform-wide Site Admin role. Speaks in user ids
+// only - identity lives in the Panel's own store - see IAccessAdminService.
+builder.Services.AddScoped<IAccessAdminService, AccessAdminService>();
+
+// Suspension, cancellation and reopening - the one admin action that can visibly stop a paying
+// customer's servers. See IOrganizationLifecycleService for why it needs no Worker changes.
+builder.Services.AddScoped<IOrganizationLifecycleService, OrganizationLifecycleService>();
+
+// Gates role management on Plan.HasRoles - the one place a subscription tier enters authorization,
+// and the only reason JumpStart never needs to know what a plan is. Registered after AddJumpStart so
+// it replaces the framework's permissive default. See PlanRoleManagementPolicy.
+builder.Services.AddScoped<JumpStart.Authorization.IRoleManagementPolicy, PlanRoleManagementPolicy>();
+
+// An Organization defining its own roles - the "role separation" the pricing page sells. Distinct
+// from IOrganizationAdminService above: this one only ever touches the caller's own tenant.
+builder.Services.AddScoped<IOrganizationRoleService, OrganizationRoleService>();
+
+// The same Organization managing its own people. Separate from IAccessAdminService above for one
+// reason worth stating: grants here run through IRoleRepository, so a member cannot hand out a role
+// containing a permission they do not hold themselves.
+builder.Services.AddScoped<IOrganizationMemberService, OrganizationMemberService>();
+
+// Inviting somebody who is not a member yet - the only way the membership list grows to include a
+// person who could not already reach it. The lifecycle (tokens, expiry, revocation, binding a
+// redemption to the invited address) is JumpStart's ITenantInvitationService, registered by
+// AddJumpStart; this composes it with the role rules and the email.
+builder.Services.AddScoped<IOrganizationInvitationService, OrganizationInvitationService>();
+
+// Bringing an Organization into existence, fully formed - a tenant, a plan, the first billing
+// period, the invoice for it, and the founder's Owner role. Two callers now: sign-up, and somebody
+// deliberately creating an additional one. See IOrganizationProvisioningService.
+builder.Services.AddScoped<IOrganizationProvisioningService, OrganizationProvisioningService>();
+
+// Replaces JumpStart's deny-everything default, so a site admin can act inside a customer's
+// Organization as an owner of it - and only as an owner of it. Registered here rather than left to
+// the framework because who qualifies is RustArchon's question, not JumpStart's. Every grant is
+// logged. See SiteAdminCrossTenantPolicy.
+builder.Services.AddScoped<JumpStart.Authorization.ICrossTenantAccessPolicy, SiteAdminCrossTenantPolicy>();
+
+// Collapsing an Organization onto the built-in Owner role when it downgrades to a plan without role
+// separation. Driven by SubscriptionScheduleService when the deferred change lands, weeks after the
+// customer agreed to it. See IRoleCompressionService.
+builder.Services.AddScoped<IRoleCompressionService, RoleCompressionService>();
+
+// ============================================
 // 5. JWT AUTHENTICATION CONFIGURATION
 // ============================================
 var jwtSettings = builder.Configuration.GetSection("JwtSettings").Get<JwtSettings>()
@@ -271,6 +364,12 @@ builder.Services.AddAuthorization(options =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageSettingsPermission));
     options.AddPolicy("ManagePlans", policy =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManagePlansPermission));
+    options.AddPolicy("ViewReports", policy =>
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ViewReportsPermission));
+    options.AddPolicy("ManageBilling", policy =>
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageBillingPermission));
+    options.AddPolicy("ManageOrganizations", policy =>
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageOrganizationsPermission));
 });
 
 // ============================================
@@ -335,7 +434,19 @@ var app = builder.Build();
 using (var migrationScope = app.Services.CreateScope())
 {
     var dbContext = migrationScope.ServiceProvider.GetRequiredService<ApiDbContext>();
-    dbContext.Database.Migrate();
+
+    // Migrations are a relational concept. An integration-test host swaps in a non-relational
+    // provider and creates the schema from the model instead, and asking that provider to migrate
+    // throws - so the seeders below, which those tests very much do want, would never run. Guarding
+    // here rather than in the test host keeps the tested startup path identical to the real one.
+    if (dbContext.Database.IsRelational())
+    {
+        dbContext.Database.Migrate();
+    }
+    else
+    {
+        dbContext.Database.EnsureCreated();
+    }
 
     // See AdminInvitationSeeder's remarks - this is what makes a first account possible at all on a
     // fresh, invitation-gated deployment.
@@ -349,7 +460,9 @@ using (var migrationScope = app.Services.CreateScope())
     // newly-registered RUSTARCHON_ADMIN_EMAIL account, and what the PlatformAdmin policy above
     // actually checks for.
     await SiteAdminRoleSeeder.EnsureRoleAsync(
-        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+        dbContext,
+        migrationScope.ServiceProvider.GetRequiredService<JumpStart.Authorization.Repositories.IRoleRepository>(),
+        migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 
     // See PlatformSettingsRegistry's remarks - seeds every known platform setting (currently just
     // InvitationCodesEnabled) with its default value if the row doesn't exist yet.
@@ -361,12 +474,40 @@ using (var migrationScope = app.Services.CreateScope())
     await PlanSeeder.EnsureDefaultsAsync(
         dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 
-    // See TenantPlanBackfiller's remarks - assigns the default (or cheapest active) Plan to any
+    // See BuiltInRoleSeeder's remarks - one platform-wide "Owner" role granted inside each
+    // Organization, rather than a copy per tenant. Runs after PlanSeeder because its permission
+    // grants are validated against the catalog, and after SiteAdminRoleSeeder because it treats that
+    // role's name as reserved.
+    await BuiltInRoleSeeder.EnsureAsync(
+        dbContext,
+        migrationScope.ServiceProvider.GetRequiredService<JumpStart.Authorization.Repositories.IRoleRepository>(),
+        migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See SubscriptionBackfiller's remarks - assigns the default (or cheapest active) Plan to any
     // Tenant that predates the Plan system, or otherwise fell through AccountBootstrapController's
     // normal assign-on-create path. Run last: depends on both the DefaultPlanId setting (seeded just
     // above) and at least one Plan existing (seeded just above that) to have anything to assign.
-    await TenantPlanBackfiller.EnsureAllTenantsHavePlanAsync(
-        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+    await SubscriptionBackfiller.EnsureAllTenantsHavePlanAsync(
+        dbContext,
+        migrationScope.ServiceProvider.GetRequiredService<IInvoiceService>(),
+        migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+}
+
+// ============================================
+// DEMO DATA (DEVELOPMENT ONLY)
+// ============================================
+// `dotnet run --project RustArchon.Api -- --seed-demo=200` generates a population of demonstration
+// Organizations with two years of trading history behind them, then exits without ever serving a
+// request. `--seed-demo=purge` removes them again. Runs after the seeders above because it needs the
+// Plan catalog they guarantee. See DemoDataSeeder.
+if (DemoDataSeeder.IsRequested(app.Environment, builder.Configuration))
+{
+    using var seedScope = app.Services.CreateScope();
+    await DemoDataSeeder.RunAsync(
+        app.Services,
+        builder.Configuration,
+        seedScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+    return;
 }
 
 // ============================================
@@ -450,3 +591,14 @@ var mapper = app.Services.GetRequiredService<IMapper>();
 mapper.ConfigurationProvider.AssertConfigurationIsValid();
 
 app.Run();
+
+/// <summary>
+/// Named so integration tests can boot this exact application through
+/// <c>WebApplicationFactory&lt;Program&gt;</c>.
+/// </summary>
+/// <remarks>
+/// Top-level statements compile to an internal <c>Program</c>, which a test assembly cannot name.
+/// Declaring the partial makes it public and nothing else - the pipeline under test is the real one,
+/// not a re-registration of it, which is the entire point of testing authorization this way.
+/// </remarks>
+public partial class Program;

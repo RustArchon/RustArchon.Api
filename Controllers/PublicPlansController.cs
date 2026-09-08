@@ -40,8 +40,14 @@ public class PublicPlansController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<List<PublicPlanDto>>> GetActive()
     {
+        // Ordered by the cheapest per-month rate a plan is offered at, rather than by a monthly price
+        // column that no longer exists - a plan sold annually-only still has a place in the ordering.
         var plans = await _repository.GetAllOrderedAsync();
-        var active = plans.Where(p => p.Active).OrderBy(p => p.MonthlyPrice).ToList();
+        var active = plans
+            .Where(p => p.Active)
+            .OrderBy(p => p.Prices.Count == 0 ? decimal.MaxValue : p.Prices.Min(pp => pp.MonthlyEquivalentFor(1)))
+            .ToList();
+
         return Ok(_mapper.Map<List<PublicPlanDto>>(active));
     }
 }
