@@ -47,6 +47,17 @@ public static class PlatformSettingsRegistry
     /// </summary>
     public const string DefaultPlanId = "DefaultPlanId";
 
+    /// <summary>
+    /// How many days after issue an invoice falls due - see <c>InvoiceService</c>, the only place this
+    /// is read. A setting rather than a constant because it is a commercial decision that changes
+    /// without a deployment, and because every "past due" figure on every receivables report is derived
+    /// from it.
+    /// </summary>
+    public const string PaymentTermsDays = "PaymentTermsDays";
+
+    /// <summary>The value <see cref="PaymentTermsDays"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultPaymentTermsDays = 14;
+
     public static async Task EnsureDefaultsAsync(ApiDbContext dbContext, IConfiguration configuration, ILogger logger)
     {
         // A deployment that already had RUSTARCHON_INVITATION_CODES_ENABLED set keeps that exact
@@ -73,6 +84,16 @@ public static class PlatformSettingsRegistry
                 "whichever active plan is currently cheapest.",
             valueType: PlatformSettingValueType.PlanReference,
             defaultValue: string.Empty,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PaymentTermsDays,
+            displayName: "Payment terms (days)",
+            description: "How long after an invoice is issued it falls due. Everything a receivables " +
+                "report calls overdue is measured from this.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultPaymentTermsDays.ToString(),
             logger: logger);
     }
 

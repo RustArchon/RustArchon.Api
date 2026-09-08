@@ -42,17 +42,61 @@ public static class SiteAdminRoleSeeder
     public const string ManagePlansPermission = "Platform.ManagePlans";
 
     /// <summary>
+    /// Reading the platform-wide operational reports - renewals, signups, receivables. Separate from
+    /// <see cref="ManagePlansPermission"/> on purpose: looking at what the business is owed is a
+    /// different job from changing what it charges.
+    /// </summary>
+    public const string ViewReportsPermission = "Platform.ViewReports";
+
+    /// <summary>
+    /// Recording payments, issuing credit notes, voiding and writing off invoices. Separate from
+    /// <see cref="ViewReportsPermission"/> for the same reason that one is separate from managing
+    /// plans: reading what is owed and deciding a debt will never be collected are different jobs, and
+    /// only the second one moves money in the books.
+    /// </summary>
+    public const string ManageBillingPermission = "Platform.ManageBilling";
+
+    /// <summary>
+    /// Opening up one named customer's account - their servers, their invoices, who belongs to it - and
+    /// taking support actions on it.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="ViewReportsPermission"/>, and the distinction is not a formality: the
+    /// reports are aggregates over the whole customer base, while this reaches into an individual
+    /// account and can act on its infrastructure. Someone trusted to read what the business is owed is
+    /// not thereby someone who should be able to send an RCON command to a customer's server.
+    /// </remarks>
+    public const string ManageOrganizationsPermission = "Platform.ManageOrganizations";
+
+    /// <summary>
     /// Every permission the "Site Admin" role should hold. Adding a new platform-level capability
     /// later is adding its permission string here - never a migration.
     /// </summary>
-    private static readonly string[] Permissions = [ManageInvitationsPermission, ManageSettingsPermission, ManagePlansPermission];
+    private static readonly string[] Permissions =
+    [
+        ManageInvitationsPermission,
+        ManageSettingsPermission,
+        ManagePlansPermission,
+        ViewReportsPermission,
+        ManageBillingPermission,
+        ManageOrganizationsPermission
+    ];
 
     /// <summary>
     /// Ensures the global "Site Admin" role exists and grants every permission in
     /// <see cref="Permissions"/>, creating the role and/or any missing grant.
     /// </summary>
     /// <returns>The role's <see cref="Role.Id"/>, whether it already existed or was just created.</returns>
-    public static async Task<Guid> EnsureRoleAsync(ApiDbContext dbContext, ILogger logger)
+    /// <param name="roles">
+    /// Grants go through the repository rather than straight into <c>RolePermission</c>, so
+    /// JumpStart's grant rules still apply here: a permission missing from
+    /// <see cref="PermissionCatalog"/>, or mis-scoped, fails at startup rather than becoming a grant
+    /// nobody validated. Only the "grantor already holds it" rule is waived - seeding has no grantor -
+    /// and it is waived by naming the system method, which is what ADR-019 asks for rather than
+    /// leaving the exemption implicit in a direct table write.
+    /// </param>
+    public static async Task<Guid> EnsureRoleAsync(
+        ApiDbContext dbContext, IRoleRepository roles, ILogger logger)
     {
         var role = await dbContext.Set<Role>()
             .FirstOrDefaultAsync(r => r.TenantId == null && r.Name == RoleName);
@@ -75,22 +119,10 @@ public static class SiteAdminRoleSeeder
 
         foreach (var permission in Permissions)
         {
-            var hasPermission = await dbContext.Set<RolePermission>()
-                .AnyAsync(p => p.RoleId == role.Id && p.Permission == permission);
-
-            if (!hasPermission)
-            {
-                dbContext.Set<RolePermission>().Add(new RolePermission
-                {
-                    RoleId = role.Id,
-                    Permission = permission,
-                    CreatedById = Guid.Empty,
-                    CreatedOn = DateTimeOffset.UtcNow
-                });
-                await dbContext.SaveChangesAsync();
-
-                logger.LogInformation("Granted '{Permission}' to the '{RoleName}' role.", permission, RoleName);
-            }
+            // AddPermissionAsSystemAsync is idempotent, so this needs no "already granted?" check of
+            // its own - and going through it is what subjects these grants to the same validation
+            // every other grant gets.
+            await roles.AddPermissionAsSystemAsync(role.Id, permission);
         }
 
         return role.Id;

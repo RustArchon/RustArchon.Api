@@ -1,9 +1,11 @@
 // Copyright ©2026 Scott Blomfield
 
 using System;
+using System.Linq;
 using System.Security.Claims;
+using System.Threading;
 using System.Threading.Tasks;
-using JumpStart.Authorization;
+using Microsoft.EntityFrameworkCore;
 using JumpStart.Authorization.Repositories;
 using JumpStart.Data;
 using JumpStart.MultiTenant.Repositories;
@@ -11,16 +13,15 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using RustArchon.Api.Administration;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
-using RustArchon.Api.Repositories;
-using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Controllers;
 
 /// <summary>
-/// Provisions a brand-new user with their own tenant and an "Owner" role scoped to it, so they can
-/// start adding Rust servers immediately after registering.
+/// Provisions a brand-new user with their own Organization, so they can start adding Rust servers
+/// immediately after registering.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -35,57 +36,53 @@ namespace RustArchon.Api.Controllers;
 /// from <c>Register.razor</c>/<c>ExternalLogin.razor</c> right after account creation, mirroring
 /// JumpStart's own <c>DemoNewUserBootstrapper</c> pattern (see its remarks).
 /// </para>
+/// <para>
+/// <strong>Somebody who was invited gets no Organization of their own.</strong> They are registering
+/// in order to join one that already exists, and handing them an empty second one - which is billable,
+/// occupies a free-plan slot, and appears in their switcher forever - is not what they asked for. See
+/// <see cref="EnsureTenant"/>. They can still create one deliberately later, through
+/// <see cref="OrganizationController"/>.
+/// </para>
 /// </remarks>
 [ApiController]
 [Route("api/account-bootstrap")]
 public class AccountBootstrapController : ControllerBase
 {
-    private static readonly string[] RustServerActions = ["Get", "List", "Create", "Update", "Delete"];
-    private const string OwnerRoleName = "Owner";
-
-    private readonly ITenantRepository _tenantRepository;
+    private readonly IOrganizationProvisioningService _provisioning;
     private readonly IUserTenantRepository _userTenantRepository;
     private readonly IRoleRepository _roleRepository;
-    private readonly IPlanRepository _planRepository;
-    private readonly ITenantPlanRepository _tenantPlanRepository;
-    private readonly IPlatformSettingsCache _settingsCache;
     private readonly ApiDbContext _dbContext;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AccountBootstrapController> _logger;
 
     public AccountBootstrapController(
-        ITenantRepository tenantRepository,
+        IOrganizationProvisioningService provisioning,
         IUserTenantRepository userTenantRepository,
         IRoleRepository roleRepository,
-        IPlanRepository planRepository,
-        ITenantPlanRepository tenantPlanRepository,
-        IPlatformSettingsCache settingsCache,
         ApiDbContext dbContext,
         IConfiguration configuration,
         ILogger<AccountBootstrapController> logger)
     {
-        _tenantRepository = tenantRepository ?? throw new ArgumentNullException(nameof(tenantRepository));
+        _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _userTenantRepository = userTenantRepository ?? throw new ArgumentNullException(nameof(userTenantRepository));
         _roleRepository = roleRepository ?? throw new ArgumentNullException(nameof(roleRepository));
-        _planRepository = planRepository ?? throw new ArgumentNullException(nameof(planRepository));
-        _tenantPlanRepository = tenantPlanRepository ?? throw new ArgumentNullException(nameof(tenantPlanRepository));
-        _settingsCache = settingsCache ?? throw new ArgumentNullException(nameof(settingsCache));
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     /// <summary>
-    /// Ensures the calling user has a tenant of their own, creating one (plus an "Owner" role
-    /// granting full access to their own Rust servers) if they don't already have one.
+    /// Ensures the calling user has somewhere to be - an Organization of their own, unless they were
+    /// invited to somebody else's.
     /// </summary>
     /// <param name="tenantName">
-    /// A display name for the new tenant, if one needs to be created (e.g. the user's email). If
-    /// omitted, a generic default is used - the user can rename it later.
+    /// A display name for the new Organization, if one needs to be created (e.g. the user's email).
+    /// If omitted, a generic default is used - the user can rename it later.
     /// </param>
     [HttpPost("ensure-tenant")]
     [Authorize]
-    public async Task<IActionResult> EnsureTenant([FromQuery] string? tenantName)
+    public async Task<IActionResult> EnsureTenant(
+        [FromQuery] string? tenantName, CancellationToken cancellationToken)
     {
         var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdClaim, out var userId))
@@ -93,19 +90,24 @@ public class AccountBootstrapController : ControllerBase
             return Unauthorized();
         }
 
-        // Evaluated on every call, not just the very first one - unlike the tenant/Owner-role
-        // provisioning below, this must not short-circuit once a tenant already exists, or it could
-        // never retroactively pick up a RUSTARCHON_ADMIN_EMAIL change (or a first grant for an account
-        // that registered before this existed). AssignUserToRoleAsync is itself idempotent, so calling
-        // it again here on every subsequent bootstrap check is cheap and harmless. See
-        // SiteAdminRoleSeeder's remarks for why this replaced a live email comparison entirely.
-        var adminEmail = _configuration["RUSTARCHON_ADMIN_EMAIL"];
         var callerEmail = User.Identity?.Name;
+
+        // Evaluated on every call, not just the very first one - unlike the provisioning below, this
+        // must not short-circuit once a tenant already exists, or it could never retroactively pick up
+        // a RUSTARCHON_ADMIN_EMAIL change (or a first grant for an account that registered before this
+        // existed). AssignUserToRoleAsSystemAsync is itself idempotent, so calling it again on every
+        // subsequent bootstrap check is cheap and harmless. See SiteAdminRoleSeeder's remarks.
+        var adminEmail = _configuration["RUSTARCHON_ADMIN_EMAIL"];
         if (!string.IsNullOrEmpty(adminEmail) && !string.IsNullOrEmpty(callerEmail)
             && string.Equals(callerEmail, adminEmail, StringComparison.OrdinalIgnoreCase))
         {
-            var siteAdminRoleId = await SiteAdminRoleSeeder.EnsureRoleAsync(_dbContext, _logger);
-            await _roleRepository.AssignUserToRoleAsync(userId, siteAdminRoleId, tenantId: null);
+            var siteAdminRoleId = await SiteAdminRoleSeeder.EnsureRoleAsync(
+                _dbContext, _roleRepository, _logger);
+
+            // The system variant: this is the platform's very first administrator, so there is no
+            // grantor who already holds these permissions. Without it, rule 4 refuses the one grant
+            // that makes platform administration possible at all.
+            await _roleRepository.AssignUserToRoleAsSystemAsync(userId, siteAdminRoleId, tenantId: null);
         }
 
         var existingTenants = await _userTenantRepository.GetTenantsForUserAsync(userId);
@@ -114,57 +116,50 @@ public class AccountBootstrapController : ControllerBase
             return NoContent();
         }
 
-        var tenant = await _tenantRepository.AddAsync(new Tenant
+        // They registered because somebody asked them to join an Organization. Provisioning one here
+        // would mean every invited person silently acquires an empty Organization they never wanted -
+        // billable, holding their one free-plan slot, and in their switcher forever. Checked
+        // server-side against the invitation rather than by passing a flag through registration, so
+        // it holds however they arrived: a return URL that survived the round trip, one that did not,
+        // or an invitation accepted days later.
+        if (await HasPendingInvitationAsync(callerEmail, cancellationToken))
         {
-            Name = string.IsNullOrWhiteSpace(tenantName) ? "My Organization" : tenantName,
-            IsActive = true
-        });
+            _logger.LogInformation(
+                "Skipped provisioning an organization for {Email} - they have an invitation to join "
+                + "an existing one.", callerEmail);
 
-        // Every Organization must have a Plan from the moment it exists - see TenantPlan's remarks.
-        // Which one a brand-new Organization starts on: the site admin's explicit choice (see
-        // PlatformSettingsRegistry.DefaultPlanId) if they've made one - honored even if that Plan has
-        // since been deactivated, since that's a deliberate admin decision, not a stale reference - or
-        // otherwise the cheapest currently-active Plan (no more hardcoded "Wood" - see Plan.Name's
-        // remarks on why Type went away). Upgrading is a separate, later action, not something
-        // bootstrap decides. No usable Plan at all means the deployment's seed data is broken
-        // (PlanSeeder should have guaranteed at least one exists) - failing loudly here is deliberate
-        // rather than silently leaving the tenant planless, even though the caller
-        // (NewTenantBootstrapper) treats this whole endpoint as best-effort and will just log it.
-        var defaultPlanIdRaw = await _settingsCache.GetStringAsync(PlatformSettingsRegistry.DefaultPlanId);
-        Plan? startingPlan = null;
-        if (!string.IsNullOrWhiteSpace(defaultPlanIdRaw) && Guid.TryParse(defaultPlanIdRaw, out var defaultPlanId))
-        {
-            startingPlan = await _planRepository.GetByIdAsync(defaultPlanId, null);
+            return NoContent();
         }
 
-        startingPlan ??= await _planRepository.GetCheapestActiveAsync()
-            ?? throw new InvalidOperationException("No usable Plan exists - check PlanSeeder ran and at least one Plan is still active.");
-
-        await _tenantPlanRepository.AddAsync(new TenantPlan
-        {
-            TenantId = tenant.Id,
-            PlanId = startingPlan.Id,
-            AssignedAtUtc = DateTimeOffset.UtcNow
-        });
-
-        await _userTenantRepository.AddAsync(new UserTenant { UserId = userId, TenantId = tenant.Id });
-
-        // A tenant-scoped Owner role, not a global one - it only grants access to this tenant's own
-        // RustServer records, never another tenant's.
-        var ownerRole = await _roleRepository.AddAsync(new Role
-        {
-            Name = OwnerRoleName,
-            Description = "Full access to this organization's Rust servers.",
-            TenantId = tenant.Id
-        });
-
-        foreach (var action in RustServerActions)
-        {
-            await _roleRepository.AddPermissionAsync(ownerRole.Id, $"RustServer.{action}");
-        }
-
-        await _roleRepository.AssignUserToRoleAsync(userId, ownerRole.Id, tenantId: tenant.Id);
+        await _provisioning.CreateAsync(
+            userId, tenantName, planId: null, enforceOnePerOwner: false, cancellationToken);
 
         return NoContent();
+    }
+
+    /// <summary>Whether an invitation is outstanding for this address.</summary>
+    /// <remarks>
+    /// Read directly rather than through <c>ITenantInvitationService</c>, which answers about one
+    /// tenant or one token - neither of which this knows. The question here is only "is this person
+    /// expected somewhere?".
+    /// </remarks>
+    private async Task<bool> HasPendingInvitationAsync(string? email, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return false;
+        }
+
+        var address = email.Trim().ToLowerInvariant();
+        var now = DateTimeOffset.UtcNow;
+
+        return await _dbContext.Set<TenantInvitation>()
+            .AcrossAllTenants()
+            .AnyAsync(
+                i => i.Email == address
+                    && i.AcceptedOn == null
+                    && i.RevokedOn == null
+                    && i.ExpiresOn > now,
+                cancellationToken);
     }
 }

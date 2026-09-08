@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using AutoMapper;
 using Microsoft.AspNetCore.Authorization;
@@ -46,6 +47,29 @@ public class PlansController : ControllerBase
         return dto;
     }
 
+    /// <summary>
+    /// Turns the price rows a client sent into entities, de-duplicated by term.
+    /// </summary>
+    /// <remarks>
+    /// The de-duplication matters: a unique index enforces one price per (plan, term), and a form that
+    /// submitted the same term twice would otherwise fail at the database with a constraint violation
+    /// rather than a message anyone can act on. Last one wins, which is what a user editing a row twice
+    /// would expect.
+    /// </remarks>
+    private static List<PlanPrice> ToPrices(IEnumerable<PlanPriceDto> prices) =>
+        prices
+            .GroupBy(p => p.TermMonths)
+            .Select(g => g.Last())
+            .Select(p => new PlanPrice
+            {
+                TermMonths = p.TermMonths,
+                BaseAmount = p.BaseAmount,
+                IncludedUnits = p.IncludedUnits,
+                UnitAmount = p.UnitAmount,
+                Currency = string.IsNullOrWhiteSpace(p.Currency) ? "USD" : p.Currency.ToUpperInvariant()
+            })
+            .ToList();
+
     [HttpGet("{id}")]
     public async Task<ActionResult<PlanDto>> GetById(Guid id)
     {
@@ -74,7 +98,7 @@ public class PlansController : ControllerBase
 
     /// <summary>
     /// Creates a new Plan row - either a brand-new Name, or a fresh draft for a Name whose current
-    /// Plan has no subscribers yet. If <see cref="CreatePlanDto.Active"/> is <c>true</c>, any other
+    /// Plan has never been used. If <see cref="CreatePlanDto.Active"/> is <c>true</c>, any other
     /// currently-active Plan with the same Name is deactivated first.
     /// </summary>
     [HttpPost]
@@ -85,18 +109,23 @@ public class PlansController : ControllerBase
             await _repository.DeactivateOtherActiveAsync(createDto.Name, excludePlanId: null);
         }
 
+        // Prices are set here rather than by the mapper - see PlanMappingProfile for why that map is
+        // ignored, and ToPrices for the de-duplication the unique index depends on.
         var entity = _mapper.Map<Plan>(createDto);
+        entity.Prices = ToPrices(createDto.Prices);
+
         var created = await _repository.AddAsync(entity);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, await ToDtoAsync(created));
     }
 
     /// <summary>
     /// Edits an existing Plan in place. Only meant to be called when
-    /// <see cref="PlanDto.SubscriberCount"/> is zero - the admin page routes to <see cref="Supersede"/>
-    /// instead once any Organization is assigned, but this endpoint itself doesn't block on it (an
-    /// admin fixing a genuine data-entry mistake on an already-subscribed Plan is still a legitimate,
-    /// if unusual, thing to do). If <see cref="UpdatePlanDto.Active"/> is <c>true</c>, any other
-    /// currently-active Plan with the same Name is deactivated first.
+    /// <see cref="PlanDto.SubscriberCount"/> is zero - i.e. no Organization has ever been on this
+    /// Plan, not merely none right now. Once one has, its terms are the record of what somebody was
+    /// billed, and the admin page routes to <see cref="Supersede"/> instead. This endpoint itself
+    /// doesn't block on it (an admin fixing a genuine data-entry mistake on an already-used Plan is
+    /// still a legitimate, if unusual, thing to do). If <see cref="UpdatePlanDto.Active"/> is
+    /// <c>true</c>, any other currently-active Plan with the same Name is deactivated first.
     /// </summary>
     [HttpPut("{id}")]
     public async Task<ActionResult<PlanDto>> Update(Guid id, [FromBody] UpdatePlanDto updateDto)
@@ -119,16 +148,23 @@ public class PlansController : ControllerBase
 
         _mapper.Map(updateDto, entity);
         var updated = await _repository.UpdateAsync(entity);
-        return Ok(await ToDtoAsync(updated));
+
+        // Replaced separately: UpdateAsync copies scalar values onto the tracked entity and doesn't
+        // touch child collections, so removing a term would otherwise silently do nothing.
+        await _repository.ReplacePricesAsync(id, ToPrices(updateDto.Prices));
+
+        var refreshed = await _repository.GetByIdAsync(id, null) ?? updated;
+        return Ok(await ToDtoAsync(refreshed));
     }
 
     /// <summary>
-    /// Supersedes a Plan that already has subscribers: creates a new Plan row (same Name as the one
+    /// Supersedes a Plan that has already been used: creates a new Plan row (same Name as the one
     /// being superseded, the given terms/color, <c>Active: true</c>), then deactivates the old one
     /// along with any other currently-active Plan with that Name. The old row is left in place,
-    /// untouched otherwise - existing Organizations stay pointed at it (see
-    /// <see cref="TenantPlan"/>'s remarks), so this never changes what a current subscriber is paying
-    /// or entitled to.
+    /// untouched otherwise - current Organizations stay pointed at it and past
+    /// <see cref="Subscription"/> intervals keep resolving to the terms that were actually in force at
+    /// the time (see <see cref="Subscription"/>'s remarks), so this changes neither what a current
+    /// subscriber is paying nor what a historical record says they paid.
     /// </summary>
     [HttpPost("{id}/supersede")]
     public async Task<ActionResult<PlanDto>> Supersede(Guid id, [FromBody] SupersedePlanDto supersedeDto)
@@ -139,18 +175,19 @@ public class PlansController : ControllerBase
             return NotFound();
         }
 
+        // The new row gets its own PlanPrice rows rather than sharing the old plan's: prices are what a
+        // subscriber signed up under, so the superseded plan has to keep its own copy untouched.
         var newPlan = await _repository.AddAsync(new Plan
         {
             Name = oldPlan.Name,
             ColorCode = supersedeDto.ColorCode,
-            MonthlyPrice = supersedeDto.MonthlyPrice,
-            QuarterlyPrice = supersedeDto.QuarterlyPrice,
-            AnnualPrice = supersedeDto.AnnualPrice,
+            PricingModel = supersedeDto.PricingModel,
             RetentionHistory = supersedeDto.RetentionHistory,
             HasRoles = supersedeDto.HasRoles,
             MaximumServers = supersedeDto.MaximumServers,
             MaximumUsers = supersedeDto.MaximumUsers,
-            Active = true
+            Active = true,
+            Prices = ToPrices(supersedeDto.Prices)
         });
 
         // Excludes the row we just created - deactivates oldPlan (and, defensively, anything else with
@@ -161,10 +198,12 @@ public class PlansController : ControllerBase
     }
 
     /// <summary>
-    /// Permanently removes a Plan created by mistake. Refuses to delete one with any subscribers -
-    /// <see cref="TenantPlan"/> rows reference it by <c>PlanId</c>, and deleting out from under a
-    /// current Organization would leave it planless, which is never a supported state. Deactivate it
-    /// (via <see cref="Update"/>) instead if it just shouldn't be offered to new sign-ups anymore.
+    /// Permanently removes a Plan created by mistake - only one no Organization has ever been on.
+    /// Deleting a Plan out from under a current Organization would leave it planless (never a
+    /// supported state), and deleting one that only *past* intervals reference would tear a hole in
+    /// those Organizations' subscription history - so <see cref="Subscription"/> rows of either kind
+    /// block it. Deactivate it (via <see cref="Update"/>) instead if it just shouldn't be offered to
+    /// new sign-ups anymore.
     /// </summary>
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
@@ -178,7 +217,7 @@ public class PlansController : ControllerBase
         var subscriberCount = await _repository.GetSubscriberCountAsync(id);
         if (subscriberCount > 0)
         {
-            return Conflict($"This plan has {subscriberCount} organization(s) on it and can't be deleted. Deactivate it instead.");
+            return Conflict($"This plan has been used by {subscriberCount} organization(s) and can't be deleted. Deactivate it instead.");
         }
 
         await _repository.DeleteAsync(id);

@@ -1,7 +1,9 @@
 // Copyright ©2026 Scott Blomfield
 
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using JumpStart.Data.Auditing;
+using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Data;
 
@@ -21,7 +23,7 @@ namespace RustArchon.Api.Data;
 /// <para>
 /// <strong>Many rows can share a <see cref="Name"/> over time.</strong> Per policy (see the Panel
 /// admin page's remarks), a Plan already assigned to one or more Organizations
-/// (<see cref="TenantPlan"/>) is never edited in place - a price change, for instance, creates a new
+/// (<see cref="Subscription"/>) is never edited in place - a price change, for instance, creates a new
 /// row and deactivates the old one instead, so existing Organizations keep whatever terms they signed
 /// up under. A Plan nobody has subscribed to yet can still be edited directly. This is why
 /// <see cref="Active"/> exists at all: it, not <see cref="Name"/> alone, is what a brand-new
@@ -49,14 +51,17 @@ public class Plan : AuditableEntity
     [Column(TypeName = "varchar(7)")]
     public string ColorCode { get; set; } = "#888888";
 
-    [Column(TypeName = "numeric(18,2)")]
-    public decimal MonthlyPrice { get; set; }
+    /// <summary>
+    /// What this plan costs, one row per term it is offered on - see <see cref="PlanPrice"/>. A plan with
+    /// a single Annual row is sold annually and not otherwise.
+    /// </summary>
+    public ICollection<PlanPrice> Prices { get; set; } = [];
 
-    [Column(TypeName = "numeric(18,2)")]
-    public decimal QuarterlyPrice { get; set; }
-
-    [Column(TypeName = "numeric(18,2)")]
-    public decimal AnnualPrice { get; set; }
+    /// <summary>
+    /// Whether capacity is capped at a fixed ceiling or bought by the unit. Drives how the plan is
+    /// presented and validated, not how its price is calculated - see <see cref="PlanPrice"/>.
+    /// </summary>
+    public PricingModel PricingModel { get; set; } = PricingModel.Flat;
 
     /// <summary>How many days of console/chat/player history this plan retains.</summary>
     public int RetentionHistory { get; set; }
@@ -64,7 +69,41 @@ public class Plan : AuditableEntity
     /// <summary>Whether this plan allows role separation (e.g. Owner vs. Admin) within an Organization.</summary>
     public bool HasRoles { get; set; }
 
-    public int MaximumServers { get; set; }
+    /// <summary>
+    /// Whether one person may only ever have a single Organization of their own on this plan.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Set on the free tier, where an unlimited supply of Organizations would be an unlimited supply
+    /// of free server slots. A flag rather than an inference from price, because "costs nothing" and
+    /// "should be rationed" are not the same question - a paid trial or a promotional tier would want
+    /// this too, and a free plan that is genuinely meant to be unlimited should be able to say so.
+    /// It also puts the decision where a site admin can change it, instead of in a constant.
+    /// </para>
+    /// <para>
+    /// Counted against whoever <em>created</em> the Organization, not whoever owns it now - being
+    /// handed the Owner role in somebody else's Organization is ordinary and should not spend your
+    /// own allowance. Cancelled Organizations do not count.
+    /// </para>
+    /// <para>
+    /// Worth being clear that this is a speed bump, not a control: a second email address defeats it.
+    /// It exists to stop the casual and the accidental, and it costs a real customer nothing, because
+    /// the Organization they are adding is one they are paying for.
+    /// </para>
+    /// </remarks>
+    public bool OnePerOwner { get; set; }
+
+    /// <summary>
+    /// The most servers an Organization on this plan may hold, or <c>null</c> for no ceiling.
+    /// </summary>
+    /// <remarks>
+    /// Nullable because a per-unit plan doesn't cap capacity, it charges for it - there is no number of
+    /// servers you are forbidden to have, only a number you have not paid for. Every guard that used to
+    /// read this unconditionally now has to treat null as "no ceiling to enforce" and fall through to the
+    /// entitlement check instead.
+    /// </remarks>
+    public int? MaximumServers { get; set; }
+
     public int MaximumUsers { get; set; }
 
     /// <summary>
