@@ -60,4 +60,33 @@ public interface IOrganizationProvisioningService
     Task<bool> WouldExceedOnePerOwnerAsync(
         Guid userId, Guid planId, Guid? ignoringTenantId = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Discards an Organization that was created moments ago and turned out not to be wanted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The compensating half of <see cref="CreateAsync"/>, and unlike most compensation it is
+    /// genuinely unavoidable: registration provisions the Organization before redeeming the
+    /// invitation code, precisely so that a provisioning failure costs nobody a code - which leaves
+    /// the reverse case, where redemption loses a race after the Organization already exists.
+    /// Somebody has to clear that up, and leaving it for a site admin to notice is not clearing up.
+    /// </para>
+    /// <para>
+    /// <strong>Soft delete, not a cascade.</strong> The tenant is marked deleted, which the global
+    /// filter then hides everywhere, and the founder's membership and role grants are removed so no
+    /// dangling row points at an account that is also going. The subscription and its billing period
+    /// stay where they are, unreachable - hard-deleting rows across the billing tables to tidy up a
+    /// rare race is a far larger risk than the untidiness it fixes.
+    /// </para>
+    /// <para>
+    /// <strong>It refuses if anything has happened.</strong> A server, a second member, or a raised
+    /// invoice all mean this is no longer the empty shell it was a second ago, and the caller is
+    /// told so rather than the evidence being quietly removed. In practice a new Organization on the
+    /// default plan has none of those - a free plan raises no invoice at all.
+    /// </para>
+    /// </remarks>
+    /// <returns><c>false</c> when the Organization is not eligible, or does not exist.</returns>
+    Task<bool> TryDiscardAsync(
+        Guid tenantId, Guid founderUserId, CancellationToken cancellationToken = default);
 }
