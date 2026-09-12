@@ -45,6 +45,7 @@ public class PlatformSettingsController : ControllerBase
 {
     private readonly IPlatformSettingRepository _repository;
     private readonly IPlatformSettingsCache _cache;
+    private readonly IAppGenerationCache _appGeneration;
     private readonly IApiKeyProtector _apiKeyProtector;
     private readonly IRequestClient<SendTestEmail> _sendTestEmailClient;
     private readonly IMapper _mapper;
@@ -52,12 +53,14 @@ public class PlatformSettingsController : ControllerBase
     public PlatformSettingsController(
         IPlatformSettingRepository repository,
         IPlatformSettingsCache cache,
+        IAppGenerationCache appGeneration,
         IApiKeyProtector apiKeyProtector,
         IRequestClient<SendTestEmail> sendTestEmailClient,
         IMapper mapper)
     {
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _appGeneration = appGeneration ?? throw new ArgumentNullException(nameof(appGeneration));
         _apiKeyProtector = apiKeyProtector ?? throw new ArgumentNullException(nameof(apiKeyProtector));
         _sendTestEmailClient = sendTestEmailClient ?? throw new ArgumentNullException(nameof(sendTestEmailClient));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
@@ -147,6 +150,15 @@ public class PlatformSettingsController : ControllerBase
         // Written through to Valkey immediately, right after Postgres - see IPlatformSettingsCache's
         // remarks for why this is the primary invalidation mechanism, not the cache's own TTL.
         await _cache.SetAsync(key, updateDto.Value);
+
+        // A different concern from the cache write above: that one makes sure the NEXT request sees
+        // the new value. This tells every Panel circuit that's already open and rendered the OLD value
+        // into its page chrome that its next navigation needs to be a full reload - see
+        // PlatformSettingsRegistry.KeysAffectingRenderedChrome's remarks for which keys warrant it.
+        if (PlatformSettingsRegistry.KeysAffectingRenderedChrome.Contains(key))
+        {
+            await _appGeneration.BumpAsync();
+        }
 
         return Ok(ToDto(updated));
     }

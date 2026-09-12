@@ -113,6 +113,11 @@ if (!string.IsNullOrWhiteSpace(valkeyConnectionString))
 // resolution failure - see its remarks.
 builder.Services.AddScoped<IPlatformSettingsCache, PlatformSettingsCache>();
 
+// Same Valkey-optional shape as IPlatformSettingsCache immediately above, but for a different job -
+// see IAppGenerationCache's own remarks for why an already-open Panel circuit needs a separate signal
+// from "the cached value is fresh."
+builder.Services.AddScoped<IAppGenerationCache, AppGenerationCache>();
+
 // ============================================
 // 4b-2. PLAYER GEOLOCATION (stubs - see Infrastructure/Geolocation/Providers)
 // ============================================

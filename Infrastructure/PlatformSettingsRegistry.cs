@@ -1,6 +1,7 @@
 // Copyright ©2026 Scott Blomfield
 
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -86,6 +87,17 @@ public static class PlatformSettingsRegistry
 
     /// <summary>See <see cref="DefaultSiteName"/>'s remarks - the same reasoning, for <see cref="SiteUrl"/>.</summary>
     public const string DefaultSiteUrl = "https://www.rustarchon.com";
+
+    /// <summary>
+    /// Which setting keys, when changed, need every already-open RustArchon.Panel circuit told that its
+    /// next navigation must be a full reload - see <see cref="IAppGenerationCache"/>. A key belongs here
+    /// only if it's rendered into the page chrome itself, visible on every screen regardless of which
+    /// one a circuit happens to be sitting on right now - <see cref="SiteName"/>/<see cref="SiteUrl"/>
+    /// (the nav bar's own brand name/link) are the founding members. A setting nothing currently
+    /// on-screen reflects (an SMTP host, payment terms) does not belong here: bumping the generation for
+    /// one of those would force a full reload for a change nobody would ever actually see mid-session.
+    /// </summary>
+    public static readonly IReadOnlySet<string> KeysAffectingRenderedChrome = new HashSet<string> { SiteName, SiteUrl };
 
     /// <summary>
     /// Whether registration requires a valid invitation code. Replaces the old
