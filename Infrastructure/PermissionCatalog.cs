@@ -82,6 +82,18 @@ public static class PermissionCatalog
     /// </remarks>
     public const string OrganizationManageRoles = "Organization.ManageRoles";
 
+    /// <summary>
+    /// Changing the Organization's own name and contact address.
+    /// </summary>
+    /// <remarks>
+    /// Delegable, for the same reason as <see cref="OrganizationManageMembers"/>: there is nothing
+    /// here that spends money or reshapes who holds what, so an Admin role can safely include it.
+    /// <see cref="JumpStart.Data.Tenant.ContactEmail"/> is not cosmetic - it is where every lifecycle notice
+    /// <c>OrganizationLifecycleService</c> queues actually goes, so this is also the one place an
+    /// Organization can fix a wrong or missing address itself.
+    /// </remarks>
+    public const string OrganizationManageSettings = "Organization.ManageSettings";
+
     // ---- Platform-scoped: running the business, never held inside a tenant ----
 
     public const string PlatformManageInvitations = "Platform.ManageInvitations";
@@ -98,7 +110,7 @@ public static class PermissionCatalog
     [
         ServerGet, ServerList, ServerCreate, ServerUpdate, ServerDelete, ServerSendCommand,
         SubscriptionView, SubscriptionManage,
-        OrganizationManageMembers, OrganizationManageRoles
+        OrganizationManageMembers, OrganizationManageRoles, OrganizationManageSettings
     ];
 
     /// <summary>Every platform permission - what the "Site Admin" role holds.</summary>
@@ -140,6 +152,8 @@ public static class PermissionCatalog
             "Add, suspend and remove members, and assign them roles."),
         new(OrganizationManageRoles, PermissionScope.Tenant, "Organization", DelegableByTenantAdmin: false,
             "Define the organization's own roles - Owner only, and only on a plan that includes it."),
+        new(OrganizationManageSettings, PermissionScope.Tenant, "Organization", DelegableByTenantAdmin: true,
+            "Change the organization's name and contact address."),
 
         new(PlatformManageInvitations, PermissionScope.Platform, "Platform"),
         new(PlatformManageSettings, PermissionScope.Platform, "Platform"),
