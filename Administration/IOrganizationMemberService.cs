@@ -29,6 +29,14 @@ namespace RustArchon.Api.Administration;
 /// each refuse.
 /// </para>
 /// <para>
+/// <strong>Nor may a member suspend or remove themselves, ever - not just when they are the last
+/// Owner.</strong> <see cref="SetActiveAsync"/> and <see cref="RemoveAsync"/> both refuse when the
+/// target is the caller, unconditionally, before the last-Owner check even runs: self-service is never
+/// the right way to take your own access away, whether or not the organization would survive it, and
+/// there is no self-service way back in if it was a mistake. A site admin acting on somebody else's
+/// membership from the admin console is a different caller and unaffected by this.
+/// </para>
+/// <para>
 /// Like <see cref="IAccessAdminService"/>, this speaks only in user ids: names and email addresses
 /// live in the Panel's Identity store, in a different database. The Panel joins the two.
 /// </para>
@@ -60,14 +68,16 @@ public interface IOrganizationMemberService
 
     /// <summary>Suspends or restores one person's access without removing them or their roles.</summary>
     /// <exception cref="MemberManagementException">
-    /// When suspending would leave the Organization without an active Owner.
+    /// Suspending refuses when the target is the caller themselves (unconditionally), or when it would
+    /// leave the Organization without an active Owner.
     /// </exception>
     Task SetActiveAsync(
         Guid tenantId, Guid userId, bool active, CancellationToken cancellationToken = default);
 
     /// <summary>Removes somebody from the Organization, along with the roles they held in it.</summary>
     /// <exception cref="MemberManagementException">
-    /// When this would leave the Organization without an Owner.
+    /// Refuses when the target is the caller themselves (unconditionally), or when this would leave the
+    /// Organization without an Owner.
     /// </exception>
     Task RemoveAsync(Guid tenantId, Guid userId, CancellationToken cancellationToken = default);
 }

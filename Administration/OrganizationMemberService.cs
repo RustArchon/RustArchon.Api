@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using JumpStart.Authorization;
 using JumpStart.Authorization.Repositories;
 using JumpStart.Data;
+using JumpStart.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RustArchon.Api.Data;
@@ -20,6 +21,7 @@ namespace RustArchon.Api.Administration;
 public class OrganizationMemberService(
     ApiDbContext dbContext,
     IRoleRepository roles,
+    IUserContext userContext,
     ILogger<OrganizationMemberService> logger) : IOrganizationMemberService
 {
     /// <inheritdoc />
@@ -112,6 +114,8 @@ public class OrganizationMemberService(
 
         if (!active)
         {
+            await EnsureNotSelfAsync(userId, "You cannot suspend your own access - ask another member to do it.");
+
             await EnsureNotTheLastOwnerAsync(
                 tenantId, userId, cancellationToken,
                 "This is the organization's only active owner. Suspending them would leave nobody "
@@ -131,6 +135,8 @@ public class OrganizationMemberService(
         Guid tenantId, Guid userId, CancellationToken cancellationToken = default)
     {
         var membership = await EnsureMemberAsync(tenantId, userId, cancellationToken);
+
+        await EnsureNotSelfAsync(userId, "You cannot remove yourself - ask another member to do it.");
 
         await EnsureNotTheLastOwnerAsync(
             tenantId, userId, cancellationToken,
@@ -164,6 +170,25 @@ public class OrganizationMemberService(
         Guid tenantId, Guid roleId, CancellationToken cancellationToken) =>
         await GrantableRoles.FindAsync(dbContext, tenantId, roleId, cancellationToken)
         ?? throw new MemberManagementException("That role is not one this organization can grant.");
+
+    /// <summary>
+    /// Refuses when <paramref name="userId"/> is the caller themselves.
+    /// </summary>
+    /// <remarks>
+    /// Unconditional - unlike <see cref="EnsureNotTheLastOwnerAsync"/>, this does not depend on how
+    /// many other owners exist. A member suspending or removing their own access through this
+    /// self-service surface is never the right way to do it, even when the organization would
+    /// otherwise survive the change: at best it is a mistake with no self-service way back in, and at
+    /// worst it is someone locking themselves out mid-task. A site admin can still act on somebody
+    /// else's membership from the admin console, which is a different caller and a different question.
+    /// </remarks>
+    private async Task EnsureNotSelfAsync(Guid userId, string message)
+    {
+        if (await userContext.GetCurrentUserIdAsync() == userId)
+        {
+            throw new MemberManagementException(message);
+        }
+    }
 
     /// <summary>
     /// Refuses when <paramref name="userId"/> is the only member who would still be an active Owner.
