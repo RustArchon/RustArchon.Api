@@ -34,4 +34,6 @@ public static class ApiKeyProtectorPurposes
 {
     public const string SteamApiKey = "RustArchon.RustServer.SteamApiKey.v1";
     public const string GeolocationApiKey = "RustArchon.RustServer.GeolocationApiKey.v1";
+    public const string EmailSmtpPassword = "RustArchon.PlatformSetting.EmailSmtpPassword.v1";
+    public const string EmailApiKey = "RustArchon.PlatformSetting.EmailApiKey.v1";
 }

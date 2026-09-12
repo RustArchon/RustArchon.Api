@@ -8,7 +8,9 @@ using System.Threading.Tasks;
 using JumpStart.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using RustArchon.Api.Administration;
 using RustArchon.Api.Data;
+using RustArchon.Api.Infrastructure;
 using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Billing;
@@ -16,6 +18,7 @@ namespace RustArchon.Api.Billing;
 /// <inheritdoc cref="IPaymentService" />
 public class PaymentService(
     ApiDbContext dbContext,
+    ICommunicationPublisher communicationPublisher,
     TimeProvider timeProvider,
     ILogger<PaymentService> logger) : IPaymentService
 {
@@ -96,7 +99,37 @@ public class PaymentService(
             "Recorded {Method} payment of {Amount} {Currency} for tenant {TenantId}; {Unallocated} left unallocated.",
             method, amount, payment.Currency, payment.TenantId, remaining);
 
+        await NotifyReceivedAsync(payment, cancellationToken);
+
         return payment;
+    }
+
+    /// <summary>
+    /// Queues the <see cref="EmailTemplateRegistry.Codes.PaymentReceived"/> receipt to the tenant's
+    /// own <c>ContactEmail</c> - a no-op, not an error, for a tenant with none on file.
+    /// </summary>
+    private async Task NotifyReceivedAsync(Payment payment, CancellationToken cancellationToken)
+    {
+        var tenant = await dbContext.Set<Tenant>()
+            .AcrossAllTenants()
+            .Where(t => t.Id == payment.TenantId)
+            .Select(t => new { t.Name, t.ContactEmail })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(tenant?.ContactEmail))
+        {
+            return;
+        }
+
+        await communicationPublisher.QueueTemplatedAsync(
+            EmailTemplateRegistry.Codes.PaymentReceived,
+            new Dictionary<string, string>
+            {
+                [EmailTemplateRegistry.Placeholders.OrganizationName] = tenant.Name,
+                [EmailTemplateRegistry.Placeholders.AmountPaid] = payment.Amount.ToString("C"),
+                [EmailTemplateRegistry.Placeholders.ReceivedDate] = payment.ReceivedOn.ToString("d MMM yyyy")
+            },
+            tenant.ContactEmail, userId: null, payment.TenantId, cancellationToken: cancellationToken);
     }
 
     /// <inheritdoc />

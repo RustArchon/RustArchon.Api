@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Administration;
 using RustArchon.Api.Data;
+using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Repositories;
 using RustArchon.Messaging.Contracts;
@@ -35,6 +36,10 @@ public class InternalController : ControllerBase
     private readonly IPublishEndpoint _publishEndpoint;
     private readonly IRustServerRepository _rustServerRepository;
     private readonly IRconCredentialProtector _rconCredentialProtector;
+    private readonly IApiKeyProtector _apiKeyProtector;
+    private readonly IPlatformSettingRepository _platformSettingRepository;
+    private readonly ICommunicationPublisher _communicationPublisher;
+    private readonly ICommunicationRepository _communicationRepository;
     private readonly IOrganizationProvisioningService _provisioning;
     private readonly ApiDbContext _dbContext;
 
@@ -42,12 +47,20 @@ public class InternalController : ControllerBase
         IPublishEndpoint publishEndpoint,
         IRustServerRepository rustServerRepository,
         IRconCredentialProtector rconCredentialProtector,
+        IApiKeyProtector apiKeyProtector,
+        IPlatformSettingRepository platformSettingRepository,
+        ICommunicationPublisher communicationPublisher,
+        ICommunicationRepository communicationRepository,
         IOrganizationProvisioningService provisioning,
         ApiDbContext dbContext)
     {
         _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
         _rustServerRepository = rustServerRepository ?? throw new ArgumentNullException(nameof(rustServerRepository));
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
+        _apiKeyProtector = apiKeyProtector ?? throw new ArgumentNullException(nameof(apiKeyProtector));
+        _platformSettingRepository = platformSettingRepository ?? throw new ArgumentNullException(nameof(platformSettingRepository));
+        _communicationPublisher = communicationPublisher ?? throw new ArgumentNullException(nameof(communicationPublisher));
+        _communicationRepository = communicationRepository ?? throw new ArgumentNullException(nameof(communicationRepository));
         _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
     }
@@ -63,8 +76,46 @@ public class InternalController : ControllerBase
     [HttpPost("email")]
     public async Task<IActionResult> SendEmail([FromBody] SendEmailRequestDto request)
     {
-        await _publishEndpoint.Publish(new EmailRequested(Guid.NewGuid(), request.To, request.Subject, request.HtmlBody));
+        await _communicationPublisher.QueueAsync(
+            request.To, request.UserId, request.TenantId, request.Subject, request.HtmlBody);
         return Accepted();
+    }
+
+    /// <summary>
+    /// Queues an email built from an admin-editable <see cref="Data.EmailTemplate"/> rather than raw
+    /// HTML - the templated counterpart to <see cref="SendEmail"/>, used for every account-level
+    /// (never organization-level - see <see cref="SendTemplatedEmailRequestDto.UserId"/>'s remarks)
+    /// email the Blazor web app's own Identity pages trigger.
+    /// </summary>
+    [HttpPost("email/templated")]
+    public async Task<IActionResult> SendTemplatedEmail([FromBody] SendTemplatedEmailRequestDto request)
+    {
+        await _communicationPublisher.QueueTemplatedAsync(
+            request.TemplateCode, request.Tokens, request.To, request.UserId, tenantId: null, culture: request.Culture);
+        return Accepted();
+    }
+
+    /// <summary>
+    /// Records that a communication's tracking pixel was loaded - called by RustArchon.Panel's
+    /// <c>/track/email/{id}.gif</c> route, the one public place a recipient's mail client can actually
+    /// reach. A no-op (still 204, never an error) for an id that doesn't exist, is still Queued, or is
+    /// already past Sent - see <see cref="IInternalCommunicationApiClient"/>'s Panel-side remarks for
+    /// why this can never fail loudly: a broken response here must never become a broken image in
+    /// somebody's inbox.
+    /// </summary>
+    [HttpPost("communications/{id:guid}/viewed")]
+    public async Task<IActionResult> MarkCommunicationViewed(Guid id, CancellationToken cancellationToken)
+    {
+        var communication = await _communicationRepository.GetByIdAcrossTenantsAsync(id, cancellationToken);
+
+        if (communication is { Status: Data.CommunicationStatus.Sent })
+        {
+            communication.Status = Data.CommunicationStatus.Viewed;
+            communication.ViewedOn = DateTimeOffset.UtcNow;
+            await _communicationRepository.SaveAsync(communication, cancellationToken);
+        }
+
+        return NoContent();
     }
 
     /// <summary>
@@ -135,5 +186,38 @@ public class InternalController : ControllerBase
             _rconCredentialProtector.Unprotect(server.RconPassword),
             server.AssignedWorkerId,
             server.LastHeartbeatUtc);
+    }
+
+    /// <summary>
+    /// The platform's current email delivery configuration, secrets decrypted - called by
+    /// <c>RustArchon.Worker</c>'s email consumers on every send (real or test) rather than cached
+    /// anywhere, since sending an email is rare enough that there's no hot path here to protect. See
+    /// <see cref="InternalEmailSettingsDto"/>'s remarks.
+    /// </summary>
+    [HttpGet("email-settings")]
+    public async Task<ActionResult<InternalEmailSettingsDto>> GetEmailSettings()
+    {
+        var settings = (await _platformSettingRepository.GetAllAsync())
+            .ToDictionary(s => s.Key, s => s);
+
+        string Value(string key) => settings.TryGetValue(key, out var s) ? s.Value : string.Empty;
+
+        string Decrypt(string key, string purpose)
+        {
+            var stored = Value(key);
+            return string.IsNullOrEmpty(stored) ? string.Empty : _apiKeyProtector.Unprotect(purpose, stored);
+        }
+
+        return new InternalEmailSettingsDto(
+            ServiceProvider: Value(PlatformSettingsRegistry.EmailServiceProvider),
+            SmtpHost: Value(PlatformSettingsRegistry.EmailSmtpHost),
+            SmtpPort: int.TryParse(Value(PlatformSettingsRegistry.EmailSmtpPort), out var port)
+                ? port : PlatformSettingsRegistry.DefaultEmailSmtpPort,
+            SmtpEnableSsl: !bool.TryParse(Value(PlatformSettingsRegistry.EmailSmtpEnableSsl), out var ssl) || ssl,
+            SmtpUsername: Value(PlatformSettingsRegistry.EmailSmtpUsername),
+            SmtpPassword: Decrypt(PlatformSettingsRegistry.EmailSmtpPassword, ApiKeyProtectorPurposes.EmailSmtpPassword),
+            ApiKey: Decrypt(PlatformSettingsRegistry.EmailApiKey, ApiKeyProtectorPurposes.EmailApiKey),
+            DefaultFromAddress: Value(PlatformSettingsRegistry.EmailDefaultFromAddress),
+            DefaultFromName: Value(PlatformSettingsRegistry.EmailDefaultFromName));
     }
 }

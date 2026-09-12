@@ -1,11 +1,14 @@
 // Copyright ©2026 Scott Blomfield
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using JumpStart.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using RustArchon.Api.Administration;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Shared.DTOs;
@@ -15,6 +18,7 @@ namespace RustArchon.Api.Billing;
 /// <inheritdoc cref="IInvoiceService" />
 public class InvoiceService(
     ApiDbContext dbContext,
+    ICommunicationPublisher communicationPublisher,
     TimeProvider timeProvider,
     ILogger<InvoiceService> logger) : IInvoiceService
 {
@@ -98,7 +102,39 @@ public class InvoiceService(
             "Issued invoice {Number} to tenant {TenantId} for {Amount} {Currency}, due {DueOn}.",
             invoice.Number, invoice.TenantId, invoice.Total, invoice.Currency, invoice.DueOn);
 
+        await NotifyIssuedAsync(invoice, cancellationToken);
+
         return invoice;
+    }
+
+    /// <summary>
+    /// Queues the <see cref="EmailTemplateRegistry.Codes.InvoiceIssued"/> notice to the tenant's own
+    /// <c>ContactEmail</c> - a no-op, not an error, for a tenant with none on file.
+    /// </summary>
+    private async Task NotifyIssuedAsync(Invoice invoice, CancellationToken cancellationToken)
+    {
+        var tenant = await dbContext.Set<Tenant>()
+            .AcrossAllTenants()
+            .Where(t => t.Id == invoice.TenantId)
+            .Select(t => new { t.Name, t.ContactEmail })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(tenant?.ContactEmail))
+        {
+            return;
+        }
+
+        await communicationPublisher.QueueTemplatedAsync(
+            EmailTemplateRegistry.Codes.InvoiceIssued,
+            new Dictionary<string, string>
+            {
+                [EmailTemplateRegistry.Placeholders.OrganizationName] = tenant.Name,
+                [EmailTemplateRegistry.Placeholders.InvoiceNumber] = invoice.Number ?? string.Empty,
+                [EmailTemplateRegistry.Placeholders.AmountDue] = invoice.Total.ToString("C"),
+                [EmailTemplateRegistry.Placeholders.DueDate] =
+                    invoice.DueOn?.ToString("d MMM yyyy") ?? string.Empty
+            },
+            tenant.ContactEmail, userId: null, invoice.TenantId, cancellationToken: cancellationToken);
     }
 
     /// <summary>

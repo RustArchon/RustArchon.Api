@@ -11,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RustArchon.Api.Billing;
 using RustArchon.Api.Data;
+using RustArchon.Api.Infrastructure;
 using RustArchon.Messaging.Contracts;
 using RustArchon.Shared.DTOs;
 
@@ -20,6 +21,7 @@ namespace RustArchon.Api.Administration;
 public class OrganizationLifecycleService(
     ApiDbContext dbContext,
     IPublishEndpoint publishEndpoint,
+    ICommunicationPublisher communicationPublisher,
     TimeProvider timeProvider,
     ILogger<OrganizationLifecycleService> logger) : IOrganizationLifecycleService
 {
@@ -66,6 +68,9 @@ public class OrganizationLifecycleService(
                 "Organization {TenantId} suspended ({Was} -> {Status}); {Count} server connection(s) "
                 + "stopped. Reason: {Reason}",
                 tenantId, was, status, stopped, reason ?? "none given");
+
+            await NotifyAsync(
+                tenantId, EmailTemplateRegistry.Codes.SubscriptionSuspended, reason, cancellationToken);
         }
         else if (was == SubscriptionStatus.Suspended)
         {
@@ -74,20 +79,76 @@ public class OrganizationLifecycleService(
                 "Organization {TenantId} reinstated ({Was} -> {Status}); {Count} server connection(s) "
                 + "asked to reconnect. Reason: {Reason}",
                 tenantId, was, status, restored, reason ?? "none given");
+
+            if (status == SubscriptionStatus.Active)
+            {
+                await NotifyAsync(
+                    tenantId, EmailTemplateRegistry.Codes.SubscriptionReactivated, reason: null, cancellationToken);
+            }
         }
         else
         {
             logger.LogInformation(
                 "Organization {TenantId} moved {Was} -> {Status}. Reason: {Reason}",
                 tenantId, was, status, reason ?? "none given");
+
+            if (status == SubscriptionStatus.PastDue)
+            {
+                await NotifyAsync(
+                    tenantId, EmailTemplateRegistry.Codes.SubscriptionPastDue, reason, cancellationToken);
+            }
+            else if (status == SubscriptionStatus.Active && was == SubscriptionStatus.PastDue)
+            {
+                await NotifyAsync(
+                    tenantId, EmailTemplateRegistry.Codes.SubscriptionReactivated, reason: null, cancellationToken);
+            }
         }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Queues one of the <see cref="Codes"/>-templated status-change notices to a tenant's own
+    /// <c>ContactEmail</c>.
+    /// </summary>
+    /// <returns><c>false</c>, not an error, for a tenant with no <c>ContactEmail</c> on file, since not
+    /// every Organization has necessarily set one.</returns>
+    /// <remarks>
+    /// A bare <c>IgnoreQueryFilters()</c>, not <see cref="JumpStartQueryableExtensions.AcrossAllTenants{TEntity}"/>
+    /// - <see cref="CancelAsync"/> calls this after already soft-deleting the tenant, so the notice for
+    /// the cancellation that just happened needs to see it despite that, not just across tenants. See
+    /// the "deliberately no helper for dropping both at once" remark on <c>JumpStartQueryFilters</c>.
+    /// </remarks>
+    private async Task<bool> NotifyAsync(
+        Guid tenantId, string templateCode, string? reason, CancellationToken cancellationToken)
+    {
+        var tenant = await dbContext.Set<Tenant>()
+            .IgnoreQueryFilters()
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.Name, t.ContactEmail })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(tenant?.ContactEmail))
+        {
+            return false;
+        }
+
+        await communicationPublisher.QueueTemplatedAsync(
+            templateCode,
+            new Dictionary<string, string>
+            {
+                [EmailTemplateRegistry.Placeholders.OrganizationName] = tenant.Name,
+                [EmailTemplateRegistry.Placeholders.Reason] = reason ?? string.Empty
+            },
+            tenant.ContactEmail, userId: null, tenantId, cancellationToken: cancellationToken);
 
         return true;
     }
 
     /// <inheritdoc />
     public async Task<bool> CancelAsync(
-        Guid tenantId, string? reason, CancellationToken cancellationToken = default)
+        Guid tenantId, CancellationReasonCategory category, string? reason,
+        CancellationToken cancellationToken = default)
     {
         var now = timeProvider.GetUtcNow();
 
@@ -130,9 +191,17 @@ public class OrganizationLifecycleService(
         var stopped = await StopServersAsync(tenantId, cancellationToken);
 
         logger.LogWarning(
-            "Organization {TenantId} cancelled; {Stopped} server connection(s) stopped, {Queued} "
-            + "queued change(s) dropped. Reason: {Reason}",
-            tenantId, stopped, queued.Count, reason ?? "none given");
+            "Organization {TenantId} cancelled ({Category}); {Stopped} server connection(s) stopped, "
+            + "{Queued} queued change(s) dropped. Reason: {Reason}",
+            tenantId, category, stopped, queued.Count, reason ?? "none given");
+
+        // A cancellation specifically for a Terms of Service violation gets that template instead of
+        // the ordinary one - see CancellationReasonCategory's remarks.
+        var templateCode = category == CancellationReasonCategory.TosViolation
+            ? EmailTemplateRegistry.Codes.TosViolationNotice
+            : EmailTemplateRegistry.Codes.SubscriptionCancelled;
+
+        await NotifyAsync(tenantId, templateCode, reason, cancellationToken);
 
         return true;
     }
@@ -221,6 +290,18 @@ public class OrganizationLifecycleService(
             "Organization {TenantId} reopened on '{Plan}' ({Term} month term); {Count} server "
             + "connection(s) asked to reconnect. Not invoiced - see ReopenAsync.",
             tenantId, plan.Name, termMonths, restored);
+
+        if (!string.IsNullOrWhiteSpace(tenant.ContactEmail))
+        {
+            await communicationPublisher.QueueTemplatedAsync(
+                EmailTemplateRegistry.Codes.SubscriptionReopened,
+                new Dictionary<string, string>
+                {
+                    [EmailTemplateRegistry.Placeholders.OrganizationName] = tenant.Name,
+                    [EmailTemplateRegistry.Placeholders.PlanName] = plan.Name
+                },
+                tenant.ContactEmail, userId: null, tenantId, cancellationToken: cancellationToken);
+        }
 
         return true;
     }
