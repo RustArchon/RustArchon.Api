@@ -9,12 +9,11 @@ using System.Threading.Tasks;
 using JumpStart.Authorization;
 using JumpStart.Data;
 using JumpStart.MultiTenant.Services;
-using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RustArchon.Api.Data;
-using RustArchon.Messaging.Contracts;
+using RustArchon.Api.Infrastructure;
 using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Administration;
@@ -25,7 +24,7 @@ public class OrganizationInvitationService(
     ITenantInvitationService invitations,
     PermissionResolver resolver,
     IPermissionEvaluator permissions,
-    IPublishEndpoint publishEndpoint,
+    ICommunicationPublisher communicationPublisher,
     IConfiguration configuration,
     ILogger<OrganizationInvitationService> logger) : IOrganizationInvitationService
 {
@@ -192,13 +191,14 @@ public class OrganizationInvitationService(
     }
 
     /// <summary>
-    /// Queues the invitation email.
+    /// Queues the invitation email - through <see cref="ICommunicationPublisher"/>'s templated
+    /// overload, not built inline, so an admin can change the wording from
+    /// <c>Admin/EmailTemplates</c> without a deployment, and so it still leaves the same permanent,
+    /// admin-visible <c>Communication</c> record every other outbound email does. Organization-level
+    /// (<see cref="Communication.TenantId"/> set) but not attached to any member
+    /// (<see cref="Communication.UserId"/> null) - an invitation is addressed to an email address
+    /// nobody has necessarily registered yet, so there is no account to tie it to.
     /// </summary>
-    /// <remarks>
-    /// Published rather than sent: delivery is the Worker's job (see <c>EmailRequestedConsumer</c>),
-    /// and the Api's part finishes when the message is durably queued. The link points at the Panel,
-    /// whose address the Api already knows as the origin it allows through CORS.
-    /// </remarks>
     private async Task SendInvitationEmailAsync(
         Guid tenantId, string email, string token, CancellationToken cancellationToken)
     {
@@ -213,18 +213,13 @@ public class OrganizationInvitationService(
 
         var link = $"{panelUrl}/Organization/Invitations/Accept?token={WebUtility.UrlEncode(token)}";
 
-        var body =
-            $"""
-             <p>You've been invited to join <strong>{WebUtility.HtmlEncode(organization)}</strong> on RustArchon.</p>
-             <p><a href="{link}">Accept the invitation</a></p>
-             <p>If you don't have a RustArchon account yet, you'll be asked to create one first -
-             use this email address, since the invitation is addressed to it.</p>
-             <p>If you weren't expecting this, you can ignore it. The link stops working on its own.</p>
-             """;
-
-        await publishEndpoint.Publish(
-            new EmailRequested(
-                Guid.NewGuid(), email, $"You've been invited to join {organization}", body),
-            cancellationToken);
+        await communicationPublisher.QueueTemplatedAsync(
+            EmailTemplateRegistry.Codes.OrganizationInvitation,
+            new Dictionary<string, string>
+            {
+                ["OrganizationName"] = organization,
+                ["InviteLink"] = link
+            },
+            email, userId: null, tenantId, cancellationToken: cancellationToken);
     }
 }

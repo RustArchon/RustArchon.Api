@@ -49,6 +49,50 @@ public class InvitationsController : ControllerBase
     }
 
     /// <summary>
+    /// Reports whether a code would redeem, without consuming it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Lets <c>Register.razor</c> turn away a bad code before it creates anything, and lets the real
+    /// redemption wait until the account and its organization exist. A code spent on a registration
+    /// that then fails has bought nothing, and not spending it beats spending it and putting it back.
+    /// </para>
+    /// <para>
+    /// <strong>This is not the gate</strong> - it answers about an instant that has already passed,
+    /// so two registrations can both be told yes. <see cref="Redeem"/> is the only thing that
+    /// decides, and its single guarded UPDATE means only one of them can win.
+    /// </para>
+    /// </remarks>
+    [HttpPost("validate")]
+    public async Task<ActionResult<RedeemInvitationCodeResult>> Validate(
+        [FromBody] RedeemInvitationCodeRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var enabled = await _settingsCache.GetBooleanAsync(PlatformSettingsRegistry.InvitationCodesEnabled, defaultValue: true);
+        if (!enabled)
+        {
+            return Ok(new RedeemInvitationCodeResult { Success = true });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Code))
+        {
+            return Ok(new RedeemInvitationCodeResult { Success = false, Error = "An invitation code is required." });
+        }
+
+        var redeemable = await _repository.IsRedeemableAsync(
+            Normalise(request.Code), request.Email.Trim().ToLowerInvariant());
+
+        return Ok(new RedeemInvitationCodeResult
+        {
+            Success = redeemable,
+            Error = redeemable
+                ? null
+                : "That invitation code is invalid, already used, or not valid for this email address."
+        });
+    }
+
+    /// <summary>
     /// Attempts to redeem an invitation code. Always returns 200 - a rejected code is a normal,
     /// expected outcome here, not a server error - with <see cref="RedeemInvitationCodeResult.Success"/>
     /// telling the caller whether it actually worked.
@@ -69,11 +113,7 @@ public class InvitationsController : ControllerBase
 
         var email = request.Email.Trim().ToLowerInvariant();
 
-        // Strip whitespace/dashes so "ABCD-1234-WXYZ", "abcd1234wxyz", and "ABCD 1234 WXYZ" (however
-        // someone retypes a code by hand) all match the same stored, dash-formatted code.
-        var code = new string(request.Code.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
-
-        var redeemed = await _repository.TryRedeemAsync(code, email);
+        var redeemed = await _repository.TryRedeemAsync(Normalise(request.Code), email);
 
         return Ok(new RedeemInvitationCodeResult
         {
@@ -83,4 +123,11 @@ public class InvitationsController : ControllerBase
                 : "That invitation code is invalid, already used, or not valid for this email address."
         });
     }
+
+    /// <summary>
+    /// Strips whitespace and dashes and upper-cases, so "ABCD-1234-WXYZ", "abcd1234wxyz" and
+    /// "ABCD 1234 WXYZ" all match the same stored, dash-formatted code however someone retypes it.
+    /// </summary>
+    private static string Normalise(string code) =>
+        new string(code.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
 }

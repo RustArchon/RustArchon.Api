@@ -158,14 +158,20 @@ public class PlansController : ControllerBase
     }
 
     /// <summary>
-    /// Supersedes a Plan that has already been used: creates a new Plan row (same Name as the one
-    /// being superseded, the given terms/color, <c>Active: true</c>), then deactivates the old one
-    /// along with any other currently-active Plan with that Name. The old row is left in place,
+    /// Supersedes a Plan that has already been used: deactivates the old one (and, defensively,
+    /// anything else with that Name that was somehow also still active), then creates a new Plan row
+    /// (same Name, the given terms/color, <c>Active: true</c>). The old row is left in place,
     /// untouched otherwise - current Organizations stay pointed at it and past
     /// <see cref="Subscription"/> intervals keep resolving to the terms that were actually in force at
     /// the time (see <see cref="Subscription"/>'s remarks), so this changes neither what a current
     /// subscriber is paying nor what a historical record says they paid.
     /// </summary>
+    /// <remarks>
+    /// Deactivate-then-insert, not the other way around: the partial unique index
+    /// <c>IX_Plan_Name_WhereActive</c> allows at most one active row per Name at any moment, so
+    /// inserting the new row while the old one is still active fails the insert outright with a
+    /// duplicate-key violation - confirmed live, not theoretical.
+    /// </remarks>
     [HttpPost("{id}/supersede")]
     public async Task<ActionResult<PlanDto>> Supersede(Guid id, [FromBody] SupersedePlanDto supersedeDto)
     {
@@ -174,6 +180,8 @@ public class PlansController : ControllerBase
         {
             return NotFound();
         }
+
+        await _repository.DeactivateOtherActiveAsync(oldPlan.Name, excludePlanId: null);
 
         // The new row gets its own PlanPrice rows rather than sharing the old plan's: prices are what a
         // subscriber signed up under, so the superseded plan has to keep its own copy untouched.
@@ -184,15 +192,12 @@ public class PlansController : ControllerBase
             PricingModel = supersedeDto.PricingModel,
             RetentionHistory = supersedeDto.RetentionHistory,
             HasRoles = supersedeDto.HasRoles,
+            OnePerOwner = supersedeDto.OnePerOwner,
             MaximumServers = supersedeDto.MaximumServers,
             MaximumUsers = supersedeDto.MaximumUsers,
             Active = true,
             Prices = ToPrices(supersedeDto.Prices)
         });
-
-        // Excludes the row we just created - deactivates oldPlan (and, defensively, anything else with
-        // this Name that was somehow also still active).
-        await _repository.DeactivateOtherActiveAsync(oldPlan.Name, excludePlanId: newPlan.Id);
 
         return Ok(await ToDtoAsync(newPlan));
     }

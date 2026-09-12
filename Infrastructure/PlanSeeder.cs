@@ -43,7 +43,10 @@ public static class PlanSeeder
             // account could mint free server slots by creating Organizations. The paid tiers are
             // deliberately unlimited - a second Organization on one of those is a second
             // subscription, which is a customer rather than a problem.
-            BuildPlan("Wood", "#b08553", 0.00m, retentionDays: 30, hasRoles: false, maxServers: 1, maxUsers: 1, now, onePerOwner: true),
+            //
+            // Also the only one seeded monthly-only: a Quarterly/Annual row on a $0 plan is a
+            // discount on nothing, not a real term - see BuildPlan's monthlyOnly parameter.
+            BuildPlan("Wood", "#b08553", 0.00m, retentionDays: 30, hasRoles: false, maxServers: 1, maxUsers: 1, now, onePerOwner: true, monthlyOnly: true),
             BuildPlan("Stone", "#9a988c", 5.00m, retentionDays: 60, hasRoles: false, maxServers: 1, maxUsers: 2, now),
             BuildPlan("Metal", "#7e94a6", 15.00m, retentionDays: 90, hasRoles: false, maxServers: 5, maxUsers: 10, now),
             BuildPlan("HQM", "#4fc3d9", 29.95m, retentionDays: 265, hasRoles: true, maxServers: 10, maxUsers: 20, now));
@@ -64,7 +67,8 @@ public static class PlanSeeder
     /// </remarks>
     private static Plan BuildPlan(
         string name, string colorCode, decimal monthlyPrice, int retentionDays, bool hasRoles,
-        int maxServers, int maxUsers, DateTimeOffset now, bool onePerOwner = false) => new()
+        int maxServers, int maxUsers, DateTimeOffset now, bool onePerOwner = false,
+        bool monthlyOnly = false) => new()
     {
         Name = name,
         ColorCode = colorCode,
@@ -77,12 +81,17 @@ public static class PlanSeeder
         Active = true,
         CreatedById = Guid.Empty,
         CreatedOn = now,
-        Prices =
-        [
-            FlatPrice(BillingTerms.Monthly, monthlyPrice, maxServers),
-            FlatPrice(BillingTerms.Quarterly, Math.Round(monthlyPrice * QuarterlyMultiplier, 2), maxServers),
-            FlatPrice(BillingTerms.Annual, Math.Round(monthlyPrice * AnnualMultiplier, 2), maxServers)
-        ]
+        Prices = monthlyOnly
+            ?
+            [
+                FlatPrice(BillingTerms.Monthly, monthlyPrice, maxServers)
+            ]
+            :
+            [
+                FlatPrice(BillingTerms.Monthly, monthlyPrice, maxServers),
+                FlatPrice(BillingTerms.Quarterly, Math.Round(monthlyPrice * QuarterlyMultiplier, 2), maxServers),
+                FlatPrice(BillingTerms.Annual, Math.Round(monthlyPrice * AnnualMultiplier, 2), maxServers)
+            ]
     };
 
     private static PlanPrice FlatPrice(int termMonths, decimal amount, int includedUnits) => new()

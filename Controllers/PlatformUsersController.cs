@@ -37,6 +37,14 @@ public class PlatformUsersController(IAccessAdminService access) : ControllerBas
         CancellationToken cancellationToken) =>
         Ok(await access.GetDirectoryAsync(cancellationToken));
 
+    /// <summary>
+    /// Whether the caller themselves is a Site Admin - see <see cref="PlatformAdminStatusDto"/>'s
+    /// remarks for why reaching this at all is the answer.
+    /// </summary>
+    [HttpGet("me")]
+    public ActionResult<PlatformAdminStatusDto> GetMyStatus() =>
+        Ok(new PlatformAdminStatusDto { IsSiteAdmin = true });
+
     /// <summary>Grants the platform-wide "Site Admin" role.</summary>
     [HttpPost("{userId:guid}/site-admin")]
     public async Task<IActionResult> GrantSiteAdmin(Guid userId, CancellationToken cancellationToken) =>

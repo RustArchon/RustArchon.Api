@@ -19,6 +19,9 @@ public class PlatformSettingMappingProfile : Profile
         // Api-side and DTO-side PlatformSettingValueType are separate enums with matching member
         // names (DTOs never reference API entity types directly) - AutoMapper maps enums by member
         // name by default, so this Just Works with no explicit member-by-member configuration.
-        CreateMap<PlatformSetting, PlatformSettingDto>();
+        CreateMap<PlatformSetting, PlatformSettingDto>()
+            // Computed by PlatformSettingsController.ToDto after this map runs, not from any entity
+            // property - a Secret setting's real value never reaches this map in the first place.
+            .ForMember(dto => dto.HasValue, opt => opt.Ignore());
     }
 }

@@ -210,14 +210,17 @@ public class OrganizationsController(
             : NotFound();
     }
 
-    /// <summary>Ends the Organization: closes its subscription, stops its servers, retires the tenant.</summary>
+    /// <summary>
+    /// Ends the Organization: closes its subscription, stops its servers, retires the tenant, and
+    /// notifies its contact address - which template depends on <see cref="CancelOrganizationRequestDto.Category"/>.
+    /// </summary>
     [HttpPost("{tenantId:guid}/cancel")]
     public async Task<IActionResult> Cancel(
         Guid tenantId, [FromBody] CancelOrganizationRequestDto request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        return await lifecycle.CancelAsync(tenantId, request.Reason?.Trim(), cancellationToken)
+        return await lifecycle.CancelAsync(tenantId, request.Category, request.Reason?.Trim(), cancellationToken)
             ? NoContent()
             : NotFound();
     }

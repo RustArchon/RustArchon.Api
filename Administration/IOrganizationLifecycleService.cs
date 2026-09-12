@@ -64,7 +64,12 @@ public interface IOrganizationLifecycleService
     /// normally a bug - and would otherwise re-subscribe everyone who ever left on the next startup. A
     /// soft-deleted tenant is invisible to it through JumpStart's global filter.
     /// </remarks>
-    Task<bool> CancelAsync(Guid tenantId, string? reason, CancellationToken cancellationToken = default);
+    /// <param name="tenantId">The Organization to cancel.</param>
+    /// <param name="category">Picks which notice email is sent - see <see cref="CancellationReasonCategory"/>.</param>
+    /// <param name="reason">Optional extra detail, included in the notice alongside <paramref name="category"/>.</param>
+    Task<bool> CancelAsync(
+        Guid tenantId, CancellationReasonCategory category, string? reason,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Brings a cancelled Organization back, on the plan a site admin chooses.</summary>
     Task<bool> ReopenAsync(

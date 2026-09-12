@@ -31,4 +31,25 @@ public interface IInvitationCodeRepository : IRepository<InvitationCode>
     /// once the first commits.
     /// </remarks>
     Task<bool> TryRedeemAsync(string code, string? email);
+
+    /// <summary>
+    /// Whether this code would redeem right now, without consuming it.
+    /// </summary>
+    /// <returns><c>true</c> if a code exists that is active, unredeemed, and either unbound or bound
+    /// to <paramref name="email"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// Lets registration reject a bad code before creating anything, and - more importantly - lets
+    /// the real redemption happen last, once the account and its organization are known to exist. A
+    /// code spent on a registration that then fails has bought nothing, and not spending it is
+    /// simpler and safer than spending it and putting it back.
+    /// </para>
+    /// <para>
+    /// <strong>This is not the gate.</strong> It answers about an instant that has passed by the time
+    /// the caller reads it, so two registrations can both be told yes.
+    /// <see cref="TryRedeemAsync"/> remains the only thing that decides, and only one of them can win
+    /// it.
+    /// </para>
+    /// </remarks>
+    Task<bool> IsRedeemableAsync(string code, string? email);
 }

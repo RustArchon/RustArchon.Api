@@ -119,6 +119,70 @@ public class OrganizationProvisioningService(
         CancellationToken cancellationToken = default) =>
         OnePerOwnerRule.WouldExceedAsync(dbContext, userId, planId, ignoringTenantId, cancellationToken);
 
+    /// <inheritdoc />
+    public async Task<bool> TryDiscardAsync(
+        Guid tenantId, Guid founderUserId, CancellationToken cancellationToken = default)
+    {
+        var tenant = await dbContext.Set<Tenant>()
+            .AcrossAllTenants()
+            .FirstOrDefaultAsync(t => t.Id == tenantId, cancellationToken);
+
+        if (tenant is null)
+        {
+            return false;
+        }
+
+        // Anything at all having happened means this is no longer the empty shell it was a moment
+        // ago, and quietly deleting it would be destroying evidence rather than tidying up.
+        var hasServers = await dbContext.Set<RustServer>()
+            .AcrossAllTenants()
+            .AnyAsync(s => s.TenantId == tenantId, cancellationToken);
+
+        var members = await dbContext.Set<UserTenant>()
+            .Where(ut => ut.TenantId == tenantId)
+            .Select(ut => ut.UserId)
+            .ToListAsync(cancellationToken);
+
+        var hasInvoices = await dbContext.Set<Invoice>()
+            .AcrossAllTenants()
+            .AnyAsync(i => i.TenantId == tenantId, cancellationToken);
+
+        if (hasServers || hasInvoices || members.Any(m => m != founderUserId))
+        {
+            logger.LogWarning(
+                "Not discarding organization {TenantId}: it already has servers, invoices or other "
+                + "members. It needs cancelling by hand.", tenantId);
+
+            return false;
+        }
+
+        // The founder's own rows go, so nothing dangles at an account that is also being removed.
+        dbContext.Set<UserRole>().RemoveRange(
+            await dbContext.Set<UserRole>()
+                .AcrossAllTenants()
+                .Where(ur => ur.TenantId == tenantId)
+                .ToListAsync(cancellationToken));
+
+        dbContext.Set<UserTenant>().RemoveRange(
+            await dbContext.Set<UserTenant>()
+                .Where(ut => ut.TenantId == tenantId)
+                .ToListAsync(cancellationToken));
+
+        // Soft delete: the global filter hides it everywhere from here on, and the subscription and
+        // billing period behind it become unreachable rather than being hard-deleted across tables.
+        tenant.DeletedOn = timeProvider.GetUtcNow();
+        tenant.DeletedById = founderUserId;
+        tenant.IsActive = false;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Discarded organization {TenantId} - the registration that created it did not complete.",
+            tenantId);
+
+        return true;
+    }
+
     /// <summary>The requested plan, the platform default, or the cheapest one still on sale.</summary>
     private async Task<Plan> ResolvePlanAsync(Guid? planId, CancellationToken cancellationToken)
     {
