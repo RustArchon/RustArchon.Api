@@ -7,17 +7,20 @@ using System.Threading;
 using System.Threading.Tasks;
 using JumpStart.Authorization;
 using JumpStart.Data;
+using JumpStart.Repositories;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Billing;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
+using RustArchon.Api.Repositories;
 using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Administration;
 
 /// <inheritdoc cref="IOrganizationAdminService" />
 public class OrganizationAdminService(
-    ApiDbContext dbContext, IPaymentService paymentService) : IOrganizationAdminService
+    ApiDbContext dbContext, IPaymentService paymentService, INoteRepository notes, IUserContext userContext)
+    : IOrganizationAdminService
 {
     /// <summary>
     /// How many billing periods the detail page carries back. Enough to see the shape of an account's
@@ -218,6 +221,11 @@ public class OrganizationAdminService(
         var members = await LoadMembersAsync(tenantId, cancellationToken);
         var roles = await LoadRolesAsync(tenantId, cancellationToken);
 
+        // Same visibility rule NotesController.List applies - a badge that counted somebody else's
+        // private notes would promise the tab holds more than the viewer is actually about to see.
+        var currentUserId = await userContext.GetCurrentUserIdAsync();
+        var noteCount = (await notes.GetVisibleAsync(tenantId, null, currentUserId, cancellationToken)).Count;
+
         var pending = await dbContext.Set<ScheduledPlanChange>()
             .Where(c => c.TenantId == tenantId && c.AppliedOn == null && c.CancelledOn == null)
             .Include(c => c.Plan)
@@ -241,6 +249,7 @@ public class OrganizationAdminService(
             Invoices = [.. invoices],
             Members = members,
             Roles = roles,
+            NoteCount = noteCount,
             PendingChange = pending
         };
     }
