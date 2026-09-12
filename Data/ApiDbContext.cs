@@ -127,6 +127,35 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// </remarks>
     public DbSet<DataProtectionKey> DataProtectionKeys { get; set; } = null!;
 
+    /// <summary>
+    /// Gets or sets the Notes DbSet - a site admin's own annotations on Organizations and people.
+    /// </summary>
+    public DbSet<Note> Notes { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the Communications DbSet - a permanent record of every outbound email and its
+    /// delivery status. See <see cref="Communication"/>.
+    /// </summary>
+    public DbSet<Communication> Communications { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the EmailTemplates DbSet - the admin-editable Subject/HtmlBody sent for each kind
+    /// of email RustArchon sends. See <see cref="EmailTemplate"/>.
+    /// </summary>
+    public DbSet<EmailTemplate> EmailTemplates { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the EmailPlaceholders DbSet - reusable <c>{{Token}}</c> placeholders shared across
+    /// email templates. See <see cref="EmailPlaceholder"/>.
+    /// </summary>
+    public DbSet<EmailPlaceholder> EmailPlaceholders { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the EmailTemplateTranslations DbSet - the per-culture Subject/HtmlBody rows for
+    /// each <see cref="EmailTemplate"/>. See <see cref="EmailTemplateTranslation"/>.
+    /// </summary>
+    public DbSet<EmailTemplateTranslation> EmailTemplateTranslations { get; set; } = null!;
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -298,5 +327,46 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
             .HasIndex(s => s.Scope)
             .IsUnique()
             .HasDatabaseName("IX_InvoiceNumberSequence_Scope");
+
+        // How the Organizations and Users admin screens list notes: everything about this tenant, or
+        // everything about this person. Both nullable, so neither index alone would serve a query for
+        // "notes with no tenant" or "notes with no user" efficiently - not a real gap today, since
+        // NotesController.List refuses a request naming neither.
+        modelBuilder.Entity<Note>()
+            .HasIndex(n => n.TenantId)
+            .HasDatabaseName("IX_Note_TenantId");
+
+        modelBuilder.Entity<Note>()
+            .HasIndex(n => n.UserId)
+            .HasDatabaseName("IX_Note_UserId");
+
+        // Same reasoning as the Note indexes above - the Organizations and Users admin screens each
+        // list communications for one tenant or one user.
+        modelBuilder.Entity<Communication>()
+            .HasIndex(c => c.TenantId)
+            .HasDatabaseName("IX_Communication_TenantId");
+
+        modelBuilder.Entity<Communication>()
+            .HasIndex(c => c.UserId)
+            .HasDatabaseName("IX_Communication_UserId");
+
+        // Plain EF Core skip-navigation many-to-many - see EmailPlaceholder's own remarks for why this
+        // isn't a modeled join entity the way RolePermission/UserRole are. Named explicitly rather than
+        // left to EF's own generated default, so the table in Postgres reads the same way every other
+        // join table in this schema does.
+        modelBuilder.Entity<EmailTemplate>()
+            .HasMany(t => t.Placeholders)
+            .WithMany(p => p.Templates)
+            .UsingEntity(j => j.ToTable("EmailTemplatePlaceholder"));
+
+        // A translation is owned by exactly one template and never outlives it - deleting a template
+        // (never done through the admin UI today, see EmailTemplatesController's remarks, but not
+        // something the schema itself should forbid) should take its translations with it rather than
+        // leaving orphaned rows behind.
+        modelBuilder.Entity<EmailTemplateTranslation>()
+            .HasOne(t => t.EmailTemplate)
+            .WithMany(t => t.Translations)
+            .HasForeignKey(t => t.EmailTemplateId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

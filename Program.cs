@@ -157,11 +157,17 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<PlayerSessionSnapshotUpdatedConsumer>();
     x.AddConsumer<ServerInfoSnapshotCapturedConsumer>();
     x.AddConsumer<WorkerDiagnosticLoggedConsumer>();
+    x.AddConsumer<CommunicationDeliveredConsumer>();
 
     // 10s matches RustArchon.Worker's SendRconCommandConsumer fanout - see RustServersController's
     // SendCommand action for how a RequestTimeoutException (no instance responded - e.g. no worker
     // currently owns this server) maps to a 504.
     x.AddRequestClient<SendRconCommand>(RequestTimeout.After(s: 10));
+
+    // Longer timeout than SendRconCommand's - an actual SMTP/API round trip can genuinely take a
+    // few seconds, where an RCON socket write is near-instant. See PlatformSettingsController.TestEmail
+    // for the matching RequestTimeoutException -> 504 mapping.
+    x.AddRequestClient<SendTestEmail>(RequestTimeout.After(s: 20));
 
     x.UsingRabbitMq((context, cfg) =>
     {
@@ -250,6 +256,15 @@ builder.Services.AddScoped<IOrganizationRoleService, OrganizationRoleService>();
 // reason worth stating: grants here run through IRoleRepository, so a member cannot hand out a role
 // containing a permission they do not hold themselves.
 builder.Services.AddScoped<IOrganizationMemberService, OrganizationMemberService>();
+
+// An Organization editing its own name and contact address - the two fields OrganizationsController
+// otherwise only ever reads on a site admin's behalf.
+builder.Services.AddScoped<IOrganizationSettingsService, OrganizationSettingsService>();
+
+// The one place an outbound email becomes both a durably-queued EmailRequested message and a
+// permanent Communication record - see ICommunicationPublisher's remarks. Registered before
+// OrganizationInvitationService, which depends on it.
+builder.Services.AddScoped<ICommunicationPublisher, CommunicationPublisher>();
 
 // Inviting somebody who is not a member yet - the only way the membership list grows to include a
 // person who could not already reach it. The lifecycle (tokens, expiry, revocation, binding a
@@ -468,6 +483,11 @@ using (var migrationScope = app.Services.CreateScope())
     // InvitationCodesEnabled) with its default value if the row doesn't exist yet.
     await PlatformSettingsRegistry.EnsureDefaultsAsync(
         dbContext, builder.Configuration, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See EmailTemplateRegistry's remarks - seeds every known email template (currently just
+    // OrganizationInvitation) with its default wording if the row doesn't exist yet.
+    await EmailTemplateRegistry.EnsureDefaultsAsync(
+        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 
     // See PlanSeeder's remarks - seeds the four initial pricing tiers (Wood/Stone/Metal/HQM) if no
     // Plan rows exist yet at all.
