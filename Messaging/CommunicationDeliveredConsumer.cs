@@ -43,7 +43,15 @@ public class CommunicationDeliveredConsumer(
 
         var now = DateTimeOffset.UtcNow;
 
-        if (message.Success)
+        // Checked before Success - a suppressed send always reports Success (see
+        // SuppressedEmailDeliveryProvider's remarks on why), but it was never actually attempted and
+        // must never be recorded as Sent.
+        if (message.Suppressed)
+        {
+            communication.Status = CommunicationStatus.Suppressed;
+            communication.SuppressedOn = now;
+        }
+        else if (message.Success)
         {
             communication.Status = CommunicationStatus.Sent;
             communication.SentOn = now;

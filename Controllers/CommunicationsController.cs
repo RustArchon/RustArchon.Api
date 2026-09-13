@@ -93,6 +93,7 @@ public class CommunicationsController(ICommunicationRepository communications) :
         Data.CommunicationStatus.Bounced => Shared.DTOs.CommunicationStatus.Bounced,
         Data.CommunicationStatus.Viewed => Shared.DTOs.CommunicationStatus.Viewed,
         Data.CommunicationStatus.Cancelled => Shared.DTOs.CommunicationStatus.Cancelled,
+        Data.CommunicationStatus.Suppressed => Shared.DTOs.CommunicationStatus.Suppressed,
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
     };
 
@@ -119,6 +120,7 @@ public class CommunicationsController(ICommunicationRepository communications) :
         BouncedOn = c.BouncedOn,
         ViewedOn = c.ViewedOn,
         CancelledOn = c.CancelledOn,
+        SuppressedOn = c.SuppressedOn,
         FailureReason = c.FailureReason,
         CanCancel = c.Status == Data.CommunicationStatus.Queued
     };
