@@ -37,7 +37,14 @@ public enum CommunicationStatus
     Viewed,
 
     /// <summary>Withdrawn while still <see cref="Queued"/> - see <c>CommunicationsController.Cancel</c>.</summary>
-    Cancelled
+    Cancelled,
+
+    /// <summary>
+    /// The row and its full body were queued and saved normally, but the Worker instance that picked
+    /// it up had <c>RUSTARCHON_SUPPRESS_EMAIL_DELIVERY</c> set, so no delivery was actually attempted -
+    /// a deliberate, deployment-level choice, not a failure. See <c>RustArchon.Messaging.Contracts.CommunicationDelivered.Suppressed</c>.
+    /// </summary>
+    Suppressed
 }
 
 /// <summary>
@@ -103,6 +110,7 @@ public class Communication : AuditableEntity, ITenantScopedOptional
     public DateTimeOffset? BouncedOn { get; set; }
     public DateTimeOffset? ViewedOn { get; set; }
     public DateTimeOffset? CancelledOn { get; set; }
+    public DateTimeOffset? SuppressedOn { get; set; }
 
     /// <summary>The provider's own error, when <see cref="Status"/> is <see cref="CommunicationStatus.Bounced"/>.</summary>
     [StringLength(2000)]
