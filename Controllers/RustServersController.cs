@@ -9,7 +9,9 @@ using JumpStart.Api.Controllers;
 using JumpStart.Repositories;
 using MassTransit;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Repositories;
@@ -134,7 +136,21 @@ public class RustServersController
             return BadRequest(CapacityMessage(plan, slots));
         }
 
-        var result = await base.Create(createDto);
+        ActionResult<RustServerDto> result;
+        try
+        {
+            result = await base.Create(createDto);
+        }
+        catch (DbUpdateException ex) when (IsDuplicateNameViolation(ex))
+        {
+            // IX_RustServer_TenantId_Name (filtered to live rows - see ApiDbContext.OnModelCreating)
+            // rejected this insert. Caught here rather than left to reach the caller as a raw 500: the
+            // Panel had no way to tell "a server with that name already exists" apart from any other
+            // unhandled failure, and confirmed live, it's the ordinary shape a legitimate duplicate-name
+            // attempt takes just as much as the soft-delete-reuse case that motivated the filtered index
+            // in the first place.
+            return Conflict($"A server named '{createDto.Name}' already exists.");
+        }
 
         if (result.Result is CreatedAtActionResult { Value: RustServerDto dto } && status.TenantId is { } id)
         {
@@ -143,6 +159,16 @@ public class RustServersController
 
         return result;
     }
+
+    /// <summary>
+    /// True if <paramref name="ex"/> is specifically a violation of <c>IX_RustServer_TenantId_Name</c>'s
+    /// unique constraint - as opposed to some other <see cref="DbUpdateException"/> (a genuinely bad
+    /// request, a connection failure, etc.) that should propagate as a real error instead of being
+    /// turned into a 409. Same technique as <c>InvitationCodesController.IsUniqueCodeViolation</c>.
+    /// </summary>
+    private static bool IsDuplicateNameViolation(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } pgEx
+        && pgEx.ConstraintName == "IX_RustServer_TenantId_Name";
 
     /// <summary>
     /// Gets the calling tenant's current Plan limits and how many servers they currently have - lets
