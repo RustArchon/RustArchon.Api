@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="AutoMapper" Version="16.2.0" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.103.2" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.10" />
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.11" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
@@ -31,6 +32,20 @@
     <ProjectReference Include="..\RustArchon.Shared\RustArchon.Shared.csproj" />
     <ProjectReference Include="..\RustArchon.Messaging\RustArchon.Messaging.csproj" />
     <ProjectReference Include="..\JumpStart\JumpStart\JumpStart.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- DefaultThemeSeeder's embedded copy of the built-in "RustArchon" theme package - see that
+         class's own remarks on why this is a copy of RustArchon.Panel's wwwroot/app.css, not the
+         source of truth. Explicit LogicalName rather than relying on the SDK's default
+         namespace-plus-path convention, so DefaultThemeSeeder's resource-name string is obviously
+         correct by inspection rather than by knowing that convention. -->
+    <EmbeddedResource Include="Administration\DefaultTheme\manifest.json">
+      <LogicalName>RustArchon.Api.Administration.DefaultTheme.manifest.json</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Administration\DefaultTheme\theme.css">
+      <LogicalName>RustArchon.Api.Administration.DefaultTheme.theme.css</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

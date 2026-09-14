@@ -42,6 +42,7 @@ public class InternalController : ControllerBase
     private readonly ICommunicationRepository _communicationRepository;
     private readonly IOrganizationProvisioningService _provisioning;
     private readonly ApiDbContext _dbContext;
+    private readonly Infrastructure.ObjectStorage.IObjectStorage _objectStorage;
 
     public InternalController(
         IPublishEndpoint publishEndpoint,
@@ -52,7 +53,8 @@ public class InternalController : ControllerBase
         ICommunicationPublisher communicationPublisher,
         ICommunicationRepository communicationRepository,
         IOrganizationProvisioningService provisioning,
-        ApiDbContext dbContext)
+        ApiDbContext dbContext,
+        Infrastructure.ObjectStorage.IObjectStorage objectStorage)
     {
         _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
         _rustServerRepository = rustServerRepository ?? throw new ArgumentNullException(nameof(rustServerRepository));
@@ -63,6 +65,7 @@ public class InternalController : ControllerBase
         _communicationRepository = communicationRepository ?? throw new ArgumentNullException(nameof(communicationRepository));
         _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
+        _objectStorage = objectStorage ?? throw new ArgumentNullException(nameof(objectStorage));
     }
 
     /// <summary>
@@ -219,5 +222,22 @@ public class InternalController : ControllerBase
             ApiKey: Decrypt(PlatformSettingsRegistry.EmailApiKey, ApiKeyProtectorPurposes.EmailApiKey),
             DefaultFromAddress: Value(PlatformSettingsRegistry.EmailDefaultFromAddress),
             DefaultFromName: Value(PlatformSettingsRegistry.EmailDefaultFromName));
+    }
+
+    /// <summary>
+    /// One file from a theme's package, by the same relative path it was uploaded under (e.g.
+    /// <c>theme.css</c>, <c>images/hero.png</c>) - called by RustArchon.Panel's own public
+    /// <c>/theme-assets/...</c> route, the seam a browser's anonymous, same-origin
+    /// <c>&lt;link&gt;</c>/<c>@font-face</c> load actually reaches. Garage's real endpoint/credentials
+    /// never leave this Api - same trust boundary every other internal-only capability in this
+    /// controller already draws.
+    /// </summary>
+    /// <returns>404 if the theme or that exact path doesn't exist - indistinguishable from each other,
+    /// since neither case is anything a caller can act on differently.</returns>
+    [HttpGet("theme-assets/{themeId:guid}/{*path}")]
+    public async Task<IActionResult> GetThemeAsset(Guid themeId, string path, CancellationToken cancellationToken)
+    {
+        var content = await _objectStorage.GetAsync($"themes/{themeId:D}/{path}", cancellationToken);
+        return content is null ? NotFound() : File(content.Content, content.ContentType);
     }
 }
