@@ -127,7 +127,9 @@ public class OrganizationServerAdminService(
         try
         {
             var response = await sendCommandClient.GetResponse<RconCommandResult>(
-                new SendRconCommand(serverId, command),
+                // Always a site admin deliberately choosing to send this (see this method's own
+                // "on the Organization's behalf" remarks) - never a background fetch.
+                new SendRconCommand(serverId, command, Interactive: true),
                 cancellationToken,
                 timeout: RequestTimeout.After(s: 10));
 

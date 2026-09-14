@@ -24,10 +24,19 @@ public interface IRconEventRepository : IRepository<RconEvent>
     /// </param>
     /// <param name="since">When set, only events captured at or after this instant.</param>
     /// <param name="until">When set, only events captured at or before this instant.</param>
+    /// <param name="includeNonInteractive">
+    /// When <c>false</c> (default), non-interactive rows (<see cref="RconEvent.Interactive"/>
+    /// <c>false</c>) are excluded entirely - not just left out of what's rendered, actually absent from
+    /// the returned page, since this is the boundary <c>RustServersController.GetEvents</c> relies on
+    /// to enforce that an ordinary tenant user's request can never come back with one of those rows.
+    /// Pass <c>true</c> only after the caller has independently verified the requester is allowed to
+    /// see everything - this method itself applies no such check.
+    /// </param>
     Task<PagedResult<RconEvent>> GetForServerAsync(
         Guid rustServerId,
         QueryOptions<RconEvent> options,
         bool? isChat = null,
         DateTimeOffset? since = null,
-        DateTimeOffset? until = null);
+        DateTimeOffset? until = null,
+        bool includeNonInteractive = false);
 }

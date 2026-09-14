@@ -21,11 +21,19 @@ public class RconEventRepository(ApiDbContext context, IUserContext? userContext
         QueryOptions<RconEvent> options,
         bool? isChat = null,
         DateTimeOffset? since = null,
-        DateTimeOffset? until = null)
+        DateTimeOffset? until = null,
+        bool includeNonInteractive = false)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         IQueryable<RconEvent> query = _dbSet.Where(e => e.RustServerId == rustServerId);
+
+        // The one thing standing between a non-interactive (possibly privileged) row and an ordinary
+        // tenant user's response - see this parameter's own remarks on IRconEventRepository.
+        if (!includeNonInteractive)
+        {
+            query = query.Where(e => e.Interactive);
+        }
 
         if (isChat.HasValue)
         {
