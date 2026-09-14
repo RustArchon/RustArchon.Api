@@ -5,20 +5,31 @@ using System.ComponentModel.DataAnnotations.Schema;
 using JumpStart.Data;
 using JumpStart.Data.MultiTenant;
 using Microsoft.EntityFrameworkCore;
+using RustArchon.Messaging.Contracts;
 
 namespace RustArchon.Api.Data;
 
 /// <summary>
-/// A single captured WebRCON frame (console output, chat, a kill-feed line, or a command's
-/// response) for one registered server.
+/// A single captured WebRCON frame (console output, chat, a kill-feed line, a command's response, or
+/// a command that was sent) for one registered server.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Derives from <see cref="Entity"/>, not <c>AuditableEntity</c>/<c>AuditableNamedEntity</c> - there
 /// is no acting user for a system-captured event, no legitimate update path (this is append-only),
 /// and soft-delete semantics don't apply (future retention pruning is a real hard delete by design,
 /// not something a user can undo). <see cref="Type"/> is captured verbatim as a string, matching
 /// <c>RconFrameCaptured.Type</c> - no enum. Classifying frames (chat vs. kill-feed vs. generic
 /// console spam) is explicitly deferred to a later reader-side layer.
+/// </para>
+/// <para>
+/// Every captured frame is persisted regardless of <see cref="Interactive"/> - see
+/// <c>RconFrameCaptured</c>'s remarks for why this table itself makes no suppress-or-not decision.
+/// <see cref="Interactive"/> is filter data, not access control by itself: everywhere this entity is
+/// read back out (<c>RconEventRepository.GetForServerAsync</c>'s default, <c>RconHub</c>'s group
+/// split) applies the actual restriction - a <c>false</c> row must never reach an ordinary tenant
+/// user, only a site admin who is both acting as this tenant and has opted into the unfiltered view.
+/// </para>
 /// </remarks>
 [Table("RconEvent")]
 [Index(
@@ -70,4 +81,16 @@ public class RconEvent : Entity, ITenantScoped
     public string Message { get; set; } = string.Empty;
 
     public string? Stacktrace { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether a human actually triggered this - see <c>RconFrameCaptured.Interactive</c>'s
+    /// remarks. Everywhere this entity is read back out must filter on this; the entity itself does not.
+    /// </summary>
+    public bool Interactive { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this row is the command RustArchon sent, or something received back over
+    /// the connection - see <see cref="RconEventDirection"/>.
+    /// </summary>
+    public RconEventDirection Direction { get; set; }
 }

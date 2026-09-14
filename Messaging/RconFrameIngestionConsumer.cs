@@ -17,6 +17,17 @@ namespace RustArchon.Api.Messaging;
 /// Persists every captured WebRCON frame as an <see cref="RconEvent"/> and relays it live to any
 /// Blazor client currently watching that server's console.
 /// </summary>
+/// <remarks>
+/// Every frame is persisted unconditionally, interactive or not - see <c>RconFrameCaptured</c>'s
+/// remarks. The live relay is where <see cref="RconFrameCaptured.Interactive"/> actually matters: an
+/// interactive frame reaches <see cref="RconHub.GroupName"/> (every viewer of this server), while a
+/// non-interactive one <em>only</em> reaches <see cref="RconHub.UnfilteredGroupName"/> - the group
+/// <c>RconHub</c> only lets a site admin acting as this tenant join in the first place. This is the
+/// filtering the Panel's own client-side toggle used to attempt: pushing every event to one shared
+/// group and having Blazor decide what to render would still transmit privileged/background data to
+/// every connection regardless of what got drawn on screen. Routing to a different group entirely
+/// means a non-interactive row is never sent over an unauthorized connection at all.
+/// </remarks>
 public class RconFrameIngestionConsumer(
     IRconEventRepository repository,
     IMapper mapper,
@@ -39,12 +50,24 @@ public class RconFrameIngestionConsumer(
             Identifier = message.Identifier,
             Type = message.Type,
             Message = message.Message,
-            Stacktrace = message.Stacktrace
+            Stacktrace = message.Stacktrace,
+            Interactive = message.Interactive,
+            Direction = message.Direction
         };
 
         await repository.AddAsync(rconEvent);
 
         var dto = mapper.Map<RconEventDto>(rconEvent);
-        await hubContext.Clients.Group(RconHub.GroupName(message.ServerId)).SendAsync("ReceiveEvent", dto);
+
+        // Unfiltered viewers (site admins who opted in) see literally everything, interactive or not -
+        // sent to this group first and unconditionally so a background row is never gated behind the
+        // interactive check below reaching it late. Ordinary viewers only ever get the interactive
+        // group, and only interactive rows are ever sent there - see this class's own remarks.
+        await hubContext.Clients.Group(RconHub.UnfilteredGroupName(message.ServerId)).SendAsync("ReceiveEvent", dto);
+
+        if (message.Interactive)
+        {
+            await hubContext.Clients.Group(RconHub.GroupName(message.ServerId)).SendAsync("ReceiveEvent", dto);
+        }
     }
 }

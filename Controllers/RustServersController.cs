@@ -389,7 +389,7 @@ public class RustServersController
         try
         {
             var response = await _sendCommandClient.GetResponse<RconCommandResult>(
-                new SendRconCommand(id, request.Command),
+                new SendRconCommand(id, request.Command, request.Interactive),
                 timeout: RequestTimeout.After(s: 10));
 
             if (!response.Message.Success && response.Message.Error == "NotConnected")
@@ -429,6 +429,13 @@ public class RustServersController
     /// </param>
     /// <param name="since">Only events captured at or after this instant.</param>
     /// <param name="until">Only events captured at or before this instant.</param>
+    /// <param name="includeNonInteractive">
+    /// Requests non-interactive (background/potentially privileged) rows in addition to interactive
+    /// ones - see <c>RconEvent.Interactive</c>'s remarks. Only ever honored when the caller's own token
+    /// says they're a site admin acting as this tenant (see this action's own remarks); anyone else
+    /// passing <c>true</c> here silently gets the same interactive-only result as omitting it, rather
+    /// than a 403 that would confirm to an unprivileged caller that unfiltered data exists to ask for.
+    /// </param>
     [HttpGet("{id}/events")]
     [JumpStart.Repositories.EntityAuthorize(action: "Get")]
     public async Task<ActionResult<PagedResult<RconEventDto>>> GetEvents(
@@ -437,7 +444,8 @@ public class RustServersController
         [FromQuery] int pageSize = 100,
         [FromQuery] bool? isChat = null,
         [FromQuery] DateTimeOffset? since = null,
-        [FromQuery] DateTimeOffset? until = null)
+        [FromQuery] DateTimeOffset? until = null,
+        [FromQuery] bool includeNonInteractive = false)
     {
         var entity = await _repository.GetByIdAsync(id, null);
         if (entity is null)
@@ -447,12 +455,22 @@ public class RustServersController
 
         pageSize = Math.Clamp(pageSize, 1, MaxEventPageSize);
 
+        // Re-derived from the caller's own token every time, never trusted from the request - the
+        // whole point of filtering server-side is that a client asking nicely for the unfiltered view
+        // is not what grants it. See TokenController.ActingAsClaimType's remarks: only present on a
+        // token minted via SiteAdminCrossTenantPolicy, i.e. a site admin currently acting as this
+        // server's own tenant - the same population RconHub.JoinUnfilteredServerGroup admits.
+        var isActingAsTenant = User.HasClaim(c =>
+            c.Type == JumpStart.Services.Authentication.Controllers.TokenController.ActingAsClaimType
+            && c.Value == "true");
+
         var events = await _rconEventRepository.GetForServerAsync(
             id,
             new QueryOptions<RconEvent> { PageNumber = pageNumber, PageSize = pageSize },
             isChat,
             since,
-            until);
+            until,
+            includeNonInteractive: includeNonInteractive && isActingAsTenant);
 
         return Ok(new PagedResult<RconEventDto>
         {
@@ -732,5 +750,14 @@ public class RustServersController
     public class SendCommandRequest
     {
         public string Command { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Whether a human actually typed/clicked this, as opposed to it being a page-load side effect
+        /// or some other backend-initiated fetch reusing this same generic command pathway. No default
+        /// on the JSON side either (see <c>SendRconCommand.Interactive</c>'s own remarks for why) -
+        /// every caller of this endpoint has to set it deliberately; there's no "probably interactive"
+        /// fallback to silently get wrong again.
+        /// </summary>
+        public required bool Interactive { get; set; }
     }
 }
