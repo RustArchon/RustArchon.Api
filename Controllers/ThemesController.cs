@@ -97,6 +97,17 @@ public class ThemesController(IThemeRepository repository, ThemeService themeSer
     /// </summary>
     [HttpPost]
     [RequestSizeLimit(25 * 1024 * 1024)]
+    // See the remarks above [RequirePermission] on the class for why this exists: [ApiController]
+    // infers an implicit "multipart/form-data only" constraint for any action binding an IFormFile/
+    // [FromForm] parameter, and that constraint is enforced during action *selection* (routing) -
+    // which runs before UseAuthorization ever gets a matched endpoint to check. A caller with no
+    // permission sending any other content-type (including PermissionMatrixTests' own application/json
+    // probe) never reached this action at all; routing rejected the request with a raw 415 first,
+    // before authorization had a chance to refuse it with 403. Broadening this to accept the wrong
+    // content-type too lets routing always select this action, so [RequirePermission] runs first as
+    // intended - the existing null/empty check below still cleanly rejects a request that genuinely
+    // isn't multipart/form-data (IFormFile binding just comes back null, not an exception).
+    [Consumes("multipart/form-data", "application/json")]
     public async Task<ActionResult<ThemeDetailDto>> Upload(
         // No [FromForm] here - deliberately. ASP.NET Core already binds a bare IFormFile parameter from
         // form data on its own; adding the attribute explicitly is what breaks Swashbuckle's swagger.json
@@ -134,6 +145,9 @@ public class ThemesController(IThemeRepository repository, ThemeService themeSer
     /// </summary>
     [HttpPost("build")]
     [RequestSizeLimit(25 * 1024 * 1024)]
+    // See Upload's own remarks on why this is here - same [FromForm]-implies-multipart-only
+    // action-selection constraint, same fix.
+    [Consumes("multipart/form-data", "application/json")]
     public async Task<ActionResult<ThemeDetailDto>> Build(
         [FromForm] ThemeBuildRequest request, CancellationToken cancellationToken)
     {
@@ -164,6 +178,9 @@ public class ThemesController(IThemeRepository repository, ThemeService themeSer
     /// </summary>
     [HttpPost("{id:guid}/build")]
     [RequestSizeLimit(25 * 1024 * 1024)]
+    // See Upload's own remarks on why this is here - same [FromForm]-implies-multipart-only
+    // action-selection constraint, same fix.
+    [Consumes("multipart/form-data", "application/json")]
     public async Task<ActionResult<ThemeDetailDto>> Rebuild(
         Guid id, [FromForm] ThemeBuildRequest request, CancellationToken cancellationToken)
     {
