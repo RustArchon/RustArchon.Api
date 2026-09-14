@@ -22,8 +22,13 @@ namespace RustArchon.Api.Data;
 /// <see cref="Controllers.RustServersController"/>; it is never exposed through the API - see
 /// <c>RustArchon.Shared.DTOs.RustServerDto</c>.
 /// </remarks>
+// The (TenantId, Name) uniqueness constraint lives in ApiDbContext.OnModelCreating, not here as a
+// plain [Index] attribute - it has to be a filtered index (WHERE "DeletedOn" IS NULL), and attribute
+// indexes can't carry a filter. See that Fluent API configuration's remarks for why: a plain
+// unfiltered unique index blocks re-adding a server under a name that only a *soft-deleted* row still
+// holds - confirmed live as a real, reproducible bug (delete a server, try to re-add the same name,
+// get a raw DbUpdateException/23505 all the way back to the caller).
 [Table("RustServer")]
-[Index(nameof(TenantId), nameof(Name), IsUnique = true, Name = "IX_RustServer_TenantId_Name")]
 public class RustServer : AuditableNamedEntity, ITenantScoped
 {
     /// <summary>

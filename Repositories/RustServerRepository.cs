@@ -85,7 +85,16 @@ public class RustServerRepository(ApiDbContext context, IUserContext? userContex
             ? string.Concat(detail.AsSpan(0, ConnectionStatusDetailMaxLength - 3), "...")
             : detail;
 
+        // AcrossAllTenants() for the same reason as GetByIdAcrossTenantsAsync/GetServersNeedingClaimAsync
+        // above - this consumer has no ambient tenant (see ConnectionStatusConsumer's remarks). Since
+        // ADR-018 made the tenant query filter fail-closed (no ambient tenant => zero rows, not every
+        // row), leaving this off meant the WHERE below matched nothing for every server, every time -
+        // this call always returned false, ConnectionStatusConsumer's `if (!applied) return;` guard
+        // fired unconditionally, and no connection-status transition ever reached ConnectionLogEntry or
+        // the Logs tab. Safe to drop the filter here for the same reason it's safe on those two methods:
+        // the query is already pinned to one specific server.Id.
         var affected = await _dbSet
+            .AcrossAllTenants()
             .Where(server => server.Id == serverId
                 && (server.ConnectionStatusChangedAtUtc == null || server.ConnectionStatusChangedAtUtc <= changedAtUtc))
             .ExecuteUpdateAsync(setters => setters

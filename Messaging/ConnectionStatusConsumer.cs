@@ -15,11 +15,12 @@ namespace RustArchon.Api.Messaging;
 /// currently watching it.
 /// </summary>
 /// <remarks>
-/// Uses <see cref="IRustServerRepository.GetByIdAsync"/>/<c>UpdateAsync</c> directly, not
-/// <see cref="IRustServerRepository.GetByIdAcrossTenantsAsync"/> - a consumer has no ambient tenant
-/// context (no <c>HttpContext</c> for <c>JwtTenantContext</c> to read a claim from), and
-/// <c>JumpStartDbContext</c>'s tenant query filter is a documented no-op whenever the ambient tenant
-/// is null, so every tenant's rows are already visible here without needing <c>IgnoreQueryFilters()</c>.
+/// A consumer has no ambient tenant context (no <c>HttpContext</c> for <c>JwtTenantContext</c> to read
+/// a claim from) - since ADR-018 made <c>JumpStartDbContext</c>'s tenant query filter fail-closed (no
+/// ambient tenant means zero rows visible, not every row), <see cref="IRustServerRepository.TryApplyConnectionStatusAsync"/>
+/// has to explicitly cross the tenant boundary itself (see its own remarks) the same way
+/// <see cref="IRustServerRepository.GetByIdAcrossTenantsAsync"/> does - this consumer doesn't need to
+/// know that, it just calls the repository method as normal.
 /// </remarks>
 public class ConnectionStatusConsumer(
     IRustServerRepository repository,

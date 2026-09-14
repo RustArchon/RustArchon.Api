@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using JumpStart.Data;
 using JumpStart.Repositories;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Data;
@@ -73,15 +74,28 @@ public class PlayerSessionRepository(ApiDbContext context, IUserContext? userCon
               .OrderBy(s => s.DisplayName)
               .ToListAsync();
 
+    // AcrossAllTenants() on both of these - unlike every other method in this class, their only
+    // callers are PlayerConnectedConsumer/PlayerDisconnectedConsumer/PlayerSessionSnapshotUpdatedConsumer
+    // (confirmed: grepped for every call site), MassTransit consumers with no ambient tenant. Since
+    // ADR-018 made the tenant query filter fail-closed, the tenant-scoped form used here before always
+    // matched zero rows for these two - a disconnect could never find the session a connect had just
+    // opened, so it never closed; the self-heal for a stale open session left by a Worker restart (see
+    // PlayerConnectedConsumer's remarks) never found anything either. Both silently returned "nothing
+    // open", indistinguishable from the genuinely-correct case, so this shipped a while before being
+    // noticed. Safe to widen: every other read on this repository (GetForServerAsync and friends) is
+    // reached from an authenticated HTTP request with a real ambient tenant, and stays exactly as
+    // tenant-scoped as before - only these two, and only because nothing else ever calls them.
     /// <inheritdoc />
     public Task<PlayerSession?> GetOpenSessionAsync(Guid rustServerId, string steamId) =>
-        _dbSet.Where(s => s.RustServerId == rustServerId && s.SteamId == steamId && s.DisconnectedAtUtc == null)
+        _dbSet.AcrossAllTenants()
+              .Where(s => s.RustServerId == rustServerId && s.SteamId == steamId && s.DisconnectedAtUtc == null)
               .OrderByDescending(s => s.ConnectedAtUtc)
               .FirstOrDefaultAsync();
 
     /// <inheritdoc />
     public Task<List<PlayerSession>> GetOpenSessionsAsync(Guid rustServerId, string steamId) =>
-        _dbSet.Where(s => s.RustServerId == rustServerId && s.SteamId == steamId && s.DisconnectedAtUtc == null)
+        _dbSet.AcrossAllTenants()
+              .Where(s => s.RustServerId == rustServerId && s.SteamId == steamId && s.DisconnectedAtUtc == null)
               .ToListAsync();
 
     /// <inheritdoc />

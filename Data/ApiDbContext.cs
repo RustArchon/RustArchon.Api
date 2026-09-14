@@ -212,6 +212,21 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
             .HasFilter("\"EndDate\" IS NULL")
             .HasDatabaseName("IX_Subscription_TenantId_WhereCurrent");
 
+        // Same technique again, for the same underlying reason as Role's index above: RustServer is
+        // soft-deletable, so a plain unfiltered unique (TenantId, Name) index blocks ever reusing a
+        // name that only a *deleted* row still holds - Postgres enforces the index against every
+        // physical row, unaware of JumpStart's DeletedOn-based query filter, which only ever affects
+        // reads. Confirmed live: delete a server, try to re-add one under the same name, and it fails
+        // with a raw 23505 unique-violation reaching the caller as an unhandled 500, with no indication
+        // anywhere that the "conflicting" server is the one that was just deleted. Filtering to
+        // DeletedOn IS NULL enforces the real invariant ("at most one *live* server per name") while
+        // leaving soft-deleted rows unconstrained, exactly like Role/Plan/Subscription above.
+        modelBuilder.Entity<RustServer>()
+            .HasIndex(s => new { s.TenantId, s.Name })
+            .IsUnique()
+            .HasFilter("\"DeletedOn\" IS NULL")
+            .HasDatabaseName("IX_RustServer_TenantId_Name");
+
         // The above index only covers the open row, so it can't serve a history query - this one does,
         // in the order GetHistoryForTenantAsync reads them.
         modelBuilder.Entity<Subscription>()

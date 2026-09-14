@@ -6,7 +6,8 @@
       "launchBrowser": true,
       "launchUrl": "swagger",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RUSTARCHON_SUPPRESS_EMAIL_DELIVERY": "true"
       },
       "dotnetRunMessages": true,
       "applicationUrl": "http://localhost:5130"
@@ -17,7 +18,8 @@
       "launchBrowser": true,
       "launchUrl": "swagger",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RUSTARCHON_SUPPRESS_EMAIL_DELIVERY": "true"
       },
       "dotnetRunMessages": true,
       "applicationUrl": "http://localhost:5130"
@@ -27,7 +29,8 @@
       "launchBrowser": true,
       "launchUrl": "swagger",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RUSTARCHON_SUPPRESS_EMAIL_DELIVERY": "true"
       },
       "dotnetRunMessages": true,
       "applicationUrl": "http://localhost:5130"
@@ -37,7 +40,8 @@
       "launchBrowser": true,
       "launchUrl": "swagger",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "RUSTARCHON_SUPPRESS_EMAIL_DELIVERY": "true"
       },
       "dotnetRunMessages": true,
       "applicationUrl": "https://localhost:7130;http://localhost:5130"
