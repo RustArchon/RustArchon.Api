@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260914021650_AddThemeUpdateCheckState")]
+    partial class AddThemeUpdateCheckState
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2072,9 +2075,6 @@ namespace RustArchon.Api.Migrations
 
                     b.Property<long>("SizeBytes")
                         .HasColumnType("bigint");
-
-                    b.Property<int>("Source")
-                        .HasColumnType("integer");
 
                     b.Property<string>("UpdateUrl")
                         .HasMaxLength(2000)

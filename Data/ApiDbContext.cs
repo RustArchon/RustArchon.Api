@@ -139,6 +139,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<Communication> Communications { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the Themes DbSet - the catalog of uploaded theme packages. See <see cref="Theme"/>.
+    /// </summary>
+    public DbSet<Theme> Themes { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the EmailTemplates DbSet - the admin-editable Subject/HtmlBody sent for each kind
     /// of email RustArchon sends. See <see cref="EmailTemplate"/>.
     /// </summary>
@@ -349,6 +354,15 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
         modelBuilder.Entity<Communication>()
             .HasIndex(c => c.UserId)
             .HasDatabaseName("IX_Communication_UserId");
+
+        // Belt-and-suspenders alongside ThemeService.ActivateAsync's own application-level enforcement
+        // (see Theme.IsActive's remarks) - a partial unique index means "more than one active theme"
+        // can never happen even if some future code path forgets to clear the others first.
+        modelBuilder.Entity<Theme>()
+            .HasIndex(t => t.IsActive)
+            .HasDatabaseName("IX_Theme_IsActive_Unique")
+            .IsUnique()
+            .HasFilter("\"IsActive\" = true");
 
         // Plain EF Core skip-navigation many-to-many - see EmailPlaceholder's own remarks for why this
         // isn't a modeled join entity the way RolePermission/UserRole are. Named explicitly rather than

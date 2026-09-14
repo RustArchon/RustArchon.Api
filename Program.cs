@@ -19,8 +19,10 @@ using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Authentication;
 using RustArchon.Api.Infrastructure.Geolocation;
 using RustArchon.Api.Infrastructure.Geolocation.Providers;
+using RustArchon.Api.Infrastructure.ObjectStorage;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Infrastructure.Steam;
+using RustArchon.Api.Infrastructure.ThemeUpdates;
 using RustArchon.Api.Messaging;
 using RustArchon.Api.Reporting;
 using RustArchon.Api.Repositories;
@@ -117,6 +119,39 @@ builder.Services.AddScoped<IPlatformSettingsCache, PlatformSettingsCache>();
 // see IAppGenerationCache's own remarks for why an already-open Panel circuit needs a separate signal
 // from "the cached value is fresh."
 builder.Services.AddScoped<IAppGenerationCache, AppGenerationCache>();
+
+// Same Valkey-optional shape again - see IActiveThemeCache's own remarks for why Panel needs this
+// separate from IAppGenerationCache (that one is "reload," this one is "reload to what").
+builder.Services.AddScoped<IActiveThemeCache, ActiveThemeCache>();
+
+// ============================================
+// 4a-2. OBJECT STORAGE (theming feature's uploaded package assets - see IObjectStorage's remarks)
+// ============================================
+// Flat GARAGE_S3_* names, same convention as every other infrastructure credential in this file -
+// nothing RustArchon-specific about these three, they're just this Api's own connection to whichever
+// S3-compatible endpoint docker-compose.yml points it at (Garage in this deployment).
+builder.Services.Configure<ObjectStorageOptions>(options =>
+{
+    options.ServiceUrl = builder.Configuration["GARAGE_S3_ENDPOINT"] ?? string.Empty;
+    options.AccessKey = builder.Configuration["GARAGE_S3_ACCESS_KEY"] ?? string.Empty;
+    options.SecretKey = builder.Configuration["GARAGE_S3_SECRET_KEY"] ?? string.Empty;
+    options.BucketName = builder.Configuration["GARAGE_S3_BUCKET"] ?? "rustarchon-themes";
+});
+builder.Services.AddSingleton<IObjectStorage, S3ObjectStorage>();
+builder.Services.AddScoped<ThemeService>();
+
+// The only place this Api fetches a URL it didn't choose itself - a theme package's own manifest.json
+// sets UpdateUrl, and a theme package is exactly the kind of thing installed from someone other than
+// the admin uploading it. ConfigurePrimaryHttpMessageHandler wires in ThemeUpdateCheckClient's own
+// SSRF-hardened SocketsHttpHandler (DNS-then-validate-then-pin connect, https only, no redirects) rather
+// than the framework's default handler - see that class's remarks for the full threat model.
+// Manual only, by deliberate choice: an admin-triggered "Check for updates" (and, past that, "Install
+// update") click, never an unattended background job - see ThemeService.CheckForUpdateAsync's remarks.
+// A theme's UpdateUrl is untrusted, possibly third-party-authored content, and even with the SSRF
+// hardening below, a standing scheduled outbound call to it is a strictly bigger surface than one that
+// only ever fires when an admin deliberately asks for it.
+builder.Services.AddHttpClient<IThemeUpdateCheckClient, ThemeUpdateCheckClient>()
+    .ConfigurePrimaryHttpMessageHandler(ThemeUpdateCheckClient.CreateHandler);
 
 // ============================================
 // 4b-2. PLAYER GEOLOCATION (stubs - see Infrastructure/Geolocation/Providers)
@@ -515,6 +550,15 @@ using (var migrationScope = app.Services.CreateScope())
     await SubscriptionBackfiller.EnsureAllTenantsHavePlanAsync(
         dbContext,
         migrationScope.ServiceProvider.GetRequiredService<IInvoiceService>(),
+        migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See DefaultThemeSeeder's remarks - seeds the platform's own built-in look as a real "RustArchon"
+    // Theme row (and activates it) the first time this runs, through the same upload/validate/activate
+    // path a real admin upload uses. Last on purpose: needs nothing else here, and gracefully no-ops
+    // (logs a warning, doesn't block startup) if Garage isn't configured/reachable yet.
+    await DefaultThemeSeeder.EnsureSeededAsync(
+        migrationScope.ServiceProvider.GetRequiredService<IThemeRepository>(),
+        migrationScope.ServiceProvider.GetRequiredService<ThemeService>(),
         migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 }
 
