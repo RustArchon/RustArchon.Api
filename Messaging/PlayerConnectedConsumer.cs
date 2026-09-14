@@ -27,8 +27,12 @@ namespace RustArchon.Api.Messaging;
 /// from showing up. Both are driven entirely by the owning <see cref="RustServer"/>'s own settings
 /// (<see cref="RustServer.GeolocationProvider"/>/<see cref="RustServer.GeolocationApiKey"/>,
 /// <see cref="RustServer.SteamApiKey"/>) - there is no global fallback configuration anymore. No
-/// ambient tenant context here - see <c>ConnectionStatusConsumer</c>'s remarks for why
-/// <c>GetByIdAsync</c>-style tenant scoping still works correctly from a consumer regardless.
+/// ambient tenant context here (no <c>HttpContext</c> for <c>JwtTenantContext</c> to read a claim
+/// from) - since ADR-018 made the tenant query filter fail-closed, the server lookup below has to use
+/// <see cref="IRustServerRepository.GetByIdAcrossTenantsAsync"/>, not the ordinary tenant-scoped
+/// <c>GetByIdAsync</c> (which always matched zero rows here, silently skipping enrichment for every
+/// connect - confirmed live, alongside the identical gap in the stale-session self-heal below, which
+/// needed the same fix on <see cref="IPlayerSessionRepository.GetOpenSessionsAsync"/>).
 /// </remarks>
 public class PlayerConnectedConsumer(
     IPlayerSessionRepository repository,
@@ -76,7 +80,7 @@ public class PlayerConnectedConsumer(
         // The server's own settings decide what (if anything) gets looked up - both null-check
         // cleanly (GeolocationService/SteamApiClient both treat "no key" as "nothing to report," not
         // an error), so there's no need to branch on "is this configured" before calling either.
-        var server = await rustServerRepository.GetByIdAsync(message.ServerId, null);
+        var server = await rustServerRepository.GetByIdAcrossTenantsAsync(message.ServerId);
         if (server is null)
         {
             // Deleted between the connect happening and this consumer running - nothing left to
