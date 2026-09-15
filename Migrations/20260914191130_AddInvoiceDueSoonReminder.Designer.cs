@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260914191130_AddInvoiceDueSoonReminder")]
+    partial class AddInvoiceDueSoonReminder
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -795,41 +798,6 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("DataProtectionKeys");
                 });
 
-            modelBuilder.Entity("RustArchon.Api.Data.BlockedInvoiceIssuance", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("AttemptCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Country")
-                        .IsRequired()
-                        .HasMaxLength(2)
-                        .HasColumnType("character varying(2)");
-
-                    b.Property<DateTimeOffset>("FirstBlockedOn")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("LastAttemptOn")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("State")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex(new[] { "TenantId" }, "IX_BlockedInvoiceIssuance_TenantId")
-                        .IsUnique();
-
-                    b.ToTable("BlockedInvoiceIssuance");
-                });
-
             modelBuilder.Entity("RustArchon.Api.Data.Communication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1218,10 +1186,6 @@ namespace RustArchon.Api.Migrations
                     b.Property<decimal>("TaxTotal")
                         .HasColumnType("numeric(18,2)");
 
-                    b.Property<string>("TaxTransactionId")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
@@ -1448,9 +1412,6 @@ namespace RustArchon.Api.Migrations
 
                     b.Property<Guid>("PaymentId")
                         .HasColumnType("uuid");
-
-                    b.Property<decimal>("ReversedAmount")
-                        .HasColumnType("numeric(18,2)");
 
                     b.Property<DateTimeOffset?>("ReversedOn")
                         .HasColumnType("timestamp with time zone");
@@ -2060,48 +2021,6 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("SubscriptionPeriod");
                 });
 
-            modelBuilder.Entity("RustArchon.Api.Data.TenantBillingAddress", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("City")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<string>("Country")
-                        .IsRequired()
-                        .HasMaxLength(2)
-                        .HasColumnType("character varying(2)");
-
-                    b.Property<string>("Line1")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("Line2")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("PostalCode")
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<string>("State")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex(new[] { "TenantId" }, "IX_TenantBillingAddress_TenantId")
-                        .IsUnique();
-
-                    b.ToTable("TenantBillingAddress");
-                });
-
             modelBuilder.Entity("RustArchon.Api.Data.Theme", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2356,17 +2275,6 @@ namespace RustArchon.Api.Migrations
                     b.Navigation("QuestionResponse");
                 });
 
-            modelBuilder.Entity("RustArchon.Api.Data.BlockedInvoiceIssuance", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
             modelBuilder.Entity("RustArchon.Api.Data.Communication", b =>
                 {
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
@@ -2596,17 +2504,6 @@ namespace RustArchon.Api.Migrations
                         .IsRequired();
 
                     b.Navigation("Subscription");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.TenantBillingAddress", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("JumpStart.Authorization.Role", b =>

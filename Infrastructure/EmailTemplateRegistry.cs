@@ -87,6 +87,11 @@ public static class EmailTemplateRegistry
         /// <summary>Sent by <c>InvoiceService.IssueForPeriodAsync</c> when a new invoice is raised.</summary>
         public const string InvoiceIssued = "InvoiceIssued";
 
+        /// <summary>Sent by <c>DunningService</c> a configurable number of days before an open
+        /// invoice's due date - the first, friendliest stage of collections, before anything is
+        /// actually overdue.</summary>
+        public const string PaymentDueSoon = "PaymentDueSoon";
+
         /// <summary>Sent by <c>PaymentService.RecordPaymentAsync</c> when a payment is recorded - a
         /// receipt, not an invoice.</summary>
         public const string PaymentReceived = "PaymentReceived";
@@ -96,6 +101,12 @@ public static class EmailTemplateRegistry
         /// <c>OrganizationLifecycleService.CancelAsync</c>. The account is already closed by the time
         /// this goes out; it is not a prior warning.</summary>
         public const string TosViolationNotice = "TosViolationNotice";
+
+        /// <summary>Sent daily by <c>NexusComplianceNotificationService</c> to
+        /// <see cref="PlatformSettingsRegistry.ComplianceNotificationEmail"/> - one digest covering every
+        /// tenant whose invoice is currently blocked on a missing Stripe tax registration, grouped by
+        /// jurisdiction, rather than one email per blocked invoice.</summary>
+        public const string TaxRegistrationNeeded = "TaxRegistrationNeeded";
     }
 
     /// <summary>The stable <see cref="Data.EmailPlaceholder.Name"/> values calling code asks for -
@@ -129,6 +140,19 @@ public static class EmailTemplateRegistry
         public const string DueDate = "DueDate";
         public const string AmountPaid = "AmountPaid";
         public const string ReceivedDate = "ReceivedDate";
+
+        /// <summary>How many Organizations currently have a blocked invoice - see
+        /// <see cref="Codes.TaxRegistrationNeeded"/>.</summary>
+        public const string BlockedOrganizationCount = "BlockedOrganizationCount";
+
+        /// <summary>
+        /// Pre-rendered <c>&lt;li&gt;</c> markup, one per blocked jurisdiction - see
+        /// <see cref="Codes.TaxRegistrationNeeded"/>. A block of markup rather than a repeated set of
+        /// scalar placeholders because this template is the first one in
+        /// <see cref="EmailTemplateRegistry"/> whose content is a list of unknown length; every other
+        /// template here describes exactly one thing.
+        /// </summary>
+        public const string BlockedJurisdictionList = "BlockedJurisdictionList";
     }
 
     public static async Task EnsureDefaultsAsync(ApiDbContext dbContext, ILogger logger)
@@ -231,6 +255,21 @@ public static class EmailTemplateRegistry
             sample: "10 Sep 2026",
             logger: logger);
 
+        var blockedOrganizationCount = await EnsurePlaceholderAsync(
+            dbContext,
+            name: Placeholders.BlockedOrganizationCount,
+            description: "How many Organizations currently have an invoice blocked on a missing tax registration.",
+            sample: "3",
+            logger: logger);
+
+        var blockedJurisdictionList = await EnsurePlaceholderAsync(
+            dbContext,
+            name: Placeholders.BlockedJurisdictionList,
+            description: "Pre-rendered list markup - one line per jurisdiction, with how many invoices " +
+                "and organizations it's blocking.",
+            sample: "<li><strong>NY, US</strong> - 2 invoice(s) across 2 organization(s), blocked since 2 Sep 2026</li>",
+            logger: logger);
+
         await EnsureTemplateAsync(
             dbContext,
             code: Codes.OrganizationInvitation,
@@ -295,12 +334,13 @@ public static class EmailTemplateRegistry
             code: Codes.SubscriptionPastDue,
             name: "Subscription past due",
             description: "Sent when an Organization's subscription is marked past due.",
-            defaultSubject: "{{OrganizationName}}'s {{SiteName}} subscription is past due",
+            defaultSubject: "Payment unsuccessful - {{OrganizationName}}'s {{SiteName}} subscription is past due",
             defaultHtmlBody:
                 """
-                <p><strong>{{OrganizationName}}</strong>'s subscription has been marked past due.</p>
+                <p><strong>{{OrganizationName}}</strong>'s subscription has been marked past due -
+                payment was unsuccessful.</p>
                 <p>{{Reason}}</p>
-                <p>Servers are still running for now - settle the balance to avoid a suspension.</p>
+                <p>Servers are still running for now. Please pay immediately to avoid a suspension.</p>
                 """,
             placeholders: [siteName, siteUrl, organizationName, reason],
             logger: logger);
@@ -381,6 +421,23 @@ public static class EmailTemplateRegistry
 
         await EnsureTemplateAsync(
             dbContext,
+            code: Codes.PaymentDueSoon,
+            name: "Payment due soon",
+            description: "Sent a configurable number of days before an open invoice's due date - a " +
+                "heads-up, not yet a past-due notice.",
+            defaultSubject: "Payment coming due for {{OrganizationName}}",
+            defaultHtmlBody:
+                """
+                <p>A reminder that invoice <strong>{{InvoiceNumber}}</strong> for
+                <strong>{{OrganizationName}}</strong> - <strong>{{AmountDue}}</strong> - is due
+                <strong>{{DueDate}}</strong>.</p>
+                <p>No action is needed if this is already scheduled to be paid.</p>
+                """,
+            placeholders: [siteName, siteUrl, organizationName, invoiceNumber, amountDue, dueDate],
+            logger: logger);
+
+        await EnsureTemplateAsync(
+            dbContext,
             code: Codes.PaymentReceived,
             name: "Payment received",
             description: "Sent when a payment is recorded against an Organization's account.",
@@ -408,6 +465,28 @@ public static class EmailTemplateRegistry
                 <p>If you believe this was a mistake, please contact us to discuss it.</p>
                 """,
             placeholders: [siteName, siteUrl, organizationName, reason],
+            logger: logger);
+
+        await EnsureTemplateAsync(
+            dbContext,
+            code: Codes.TaxRegistrationNeeded,
+            name: "Tax registration needed",
+            description: "Sent once daily whenever at least one Organization's invoice is blocked on a " +
+                "missing Stripe tax registration - one digest covering every blocked jurisdiction, not " +
+                "one email per invoice.",
+            defaultSubject: "Tax registration needed - {{BlockedOrganizationCount}} organization(s) can't be invoiced",
+            defaultHtmlBody:
+                """
+                <p><strong>{{BlockedOrganizationCount}}</strong> organization(s) can't be invoiced right now
+                because Stripe reports tax is owed in a jurisdiction {{SiteName}} isn't registered in yet.</p>
+                <ul>
+                {{BlockedJurisdictionList}}
+                </ul>
+                <p>Register in Stripe's <a href="https://dashboard.stripe.com/tax/locations">Tax settings</a>
+                to resolve this - the next hourly billing pass issues each blocked invoice automatically
+                once you do, with no other action needed here.</p>
+                """,
+            placeholders: [siteName, siteUrl, blockedOrganizationCount, blockedJurisdictionList],
             logger: logger);
     }
 

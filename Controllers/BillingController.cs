@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RustArchon.Api.Billing;
 using RustArchon.Shared.DTOs;
+using Stripe;
 
 namespace RustArchon.Api.Controllers;
 
@@ -51,7 +52,7 @@ public class BillingController(IPaymentService paymentService) : ControllerBase
         {
             await paymentService.RecordPaymentAsync(
                 request.InvoiceId, request.Amount, request.Method, request.ReceivedOn,
-                request.Reference, cancellationToken);
+                request.Reference, cancellationToken: cancellationToken);
         }
         catch (ArgumentOutOfRangeException ex)
         {
@@ -65,19 +66,34 @@ public class BillingController(IPaymentService paymentService) : ControllerBase
         return await SingleAsync(request.InvoiceId, cancellationToken);
     }
 
-    /// <summary>Undoes a payment - a refund or a chargeback - reopening whatever it settled.</summary>
+    /// <summary>
+    /// Undoes some or all of a payment - a refund or a chargeback - reopening whatever it settled.
+    /// </summary>
+    /// <param name="amount">
+    /// How much to reverse, or omitted to reverse everything still live on this payment. See
+    /// <see cref="IPaymentService.ReversePaymentAsync"/>'s own remarks - for a Stripe-collected payment
+    /// this calls Stripe's real Refund API first, so a card is actually credited, not just the books.
+    /// </param>
     [HttpPost("payments/{paymentId:guid}/reverse")]
     public async Task<IActionResult> ReversePayment(
-        Guid paymentId, [FromQuery] PaymentStatus status, CancellationToken cancellationToken)
+        Guid paymentId, [FromQuery] PaymentStatus status, [FromQuery] decimal? amount,
+        CancellationToken cancellationToken)
     {
         try
         {
-            return await paymentService.ReversePaymentAsync(paymentId, status, cancellationToken)
+            return await paymentService.ReversePaymentAsync(paymentId, status, amount, cancellationToken)
                 ? NoContent()
                 : NotFound();
         }
         catch (ArgumentOutOfRangeException ex)
         {
+            return BadRequest(ex.Message);
+        }
+        catch (StripeException ex)
+        {
+            // Stripe itself refused the refund (already fully refunded on their side, an expired/
+            // canceled PaymentIntent, ...) - surfaced as a clean 400 with Stripe's own message rather
+            // than an unhandled 500, the same treatment ArgumentOutOfRangeException already gets above.
             return BadRequest(ex.Message);
         }
     }

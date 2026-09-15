@@ -129,6 +129,41 @@ public static class PlatformSettingsRegistry
     public const int DefaultPaymentTermsDays = 14;
 
     /// <summary>
+    /// How many days before an invoice's due date <c>DunningService</c> sends the "payment due soon"
+    /// reminder - see <see cref="EmailTemplateRegistry.Codes.PaymentDueSoon"/>. A commercial decision,
+    /// same reasoning as <see cref="PaymentTermsDays"/>.
+    /// </summary>
+    public const string PaymentDueSoonReminderDays = "PaymentDueSoonReminderDays";
+
+    /// <summary>The value <see cref="PaymentDueSoonReminderDays"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultPaymentDueSoonReminderDays = 14;
+
+    /// <summary>
+    /// How many days after an invoice goes past due <c>DunningService</c> waits, with it still unpaid,
+    /// before suspending the Organization (see <c>OrganizationLifecycleService.SetStatusAsync</c>).
+    /// Measured from <c>Subscription.StatusChangedOn</c> - the moment the subscription was actually
+    /// marked <see cref="Shared.DTOs.SubscriptionStatus.PastDue"/> - not from the invoice's own due
+    /// date, so the "past due" notice's own promised countdown ("suspension in N days") is exactly this
+    /// number regardless of how promptly the sweep caught the invoice going overdue.
+    /// </summary>
+    public const string SuspensionGraceDays = "SuspensionGraceDays";
+
+    /// <summary>The value <see cref="SuspensionGraceDays"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultSuspensionGraceDays = 7;
+
+    /// <summary>
+    /// Where <c>NexusComplianceNotificationService</c> sends its daily digest of tenants whose invoices
+    /// are blocked on a missing Stripe tax registration (see <c>Data.BlockedInvoiceIssuance</c>). Empty
+    /// (the seeded default) means nobody has configured one yet - the digest is skipped entirely rather
+    /// than sent nowhere. Deliberately a plain address, not "every Site Admin" - see that service's own
+    /// remarks for why: nothing in this Api can resolve a Site Admin's user id to an email address at
+    /// all (that data lives entirely in RustArchon.Panel's own Identity store), and a single
+    /// distribution address Scott configures once is simpler anyway - it doesn't depend on who currently
+    /// holds the role or whether they've ever logged in.
+    /// </summary>
+    public const string ComplianceNotificationEmail = "ComplianceNotificationEmail";
+
+    /// <summary>
     /// Which email provider is in effect - a <see cref="PlatformSettingValueType.Choice"/> among
     /// <see cref="EmailProviders"/>. Replaces an earlier "infer it from which fields are filled in"
     /// design: that fell apart the moment a second API-based provider existed, since "is the API key
@@ -244,6 +279,43 @@ public static class PlatformSettingsRegistry
                 "report calls overdue is measured from this.",
             valueType: PlatformSettingValueType.Integer,
             defaultValue: DefaultPaymentTermsDays.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PaymentDueSoonReminderDays,
+            category: Categories.Billing,
+            order: 20,
+            displayName: "Payment due soon reminder (days before due)",
+            description: "How many days before an invoice's due date to send a heads-up that payment " +
+                "is coming due.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultPaymentDueSoonReminderDays.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: SuspensionGraceDays,
+            category: Categories.Billing,
+            order: 30,
+            displayName: "Suspension grace period (days)",
+            description: "How many days an Organization stays past due, still unpaid, before its " +
+                "servers are suspended.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultSuspensionGraceDays.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: ComplianceNotificationEmail,
+            category: Categories.Billing,
+            order: 40,
+            displayName: "Tax compliance notification address",
+            description: "Where to send the daily digest of jurisdictions blocking an invoice for lack " +
+                "of a Stripe tax registration - see the Tax Registrations dashboard at " +
+                "dashboard.stripe.com/tax/locations. Leave blank to skip the digest entirely.",
+            valueType: PlatformSettingValueType.String,
+            defaultValue: string.Empty,
             logger: logger);
 
         await EnsureSettingAsync(

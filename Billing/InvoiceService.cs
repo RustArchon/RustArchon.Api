@@ -19,6 +19,7 @@ namespace RustArchon.Api.Billing;
 public class InvoiceService(
     ApiDbContext dbContext,
     ICommunicationPublisher communicationPublisher,
+    IStripeTaxService stripeTax,
     TimeProvider timeProvider,
     ILogger<InvoiceService> logger) : IInvoiceService
 {
@@ -57,34 +58,54 @@ public class InvoiceService(
         var currency = CurrencyFor(subscription, period);
         var termsDays = await PaymentTermsDaysAsync(cancellationToken);
 
+        var line = new InvoiceLine
+        {
+            Description = description,
+            ServiceStart = period.StartDate,
+            ServiceEnd = period.EndDate,
+            Quantity = period.Quantity,
+            // What one slot costs over this span, derived from what is actually being charged
+            // rather than from the catalog - a prorated line's unit price is not the list price.
+            UnitAmount = period.Quantity > 0 ? Round(amount / period.Quantity) : amount,
+            Amount = amount,
+            TaxAmount = 0m,
+            SubscriptionPeriodId = period.Id
+        };
+
         var invoice = new Invoice
         {
+            // Assigned here, not left to EF's own Guid generation, because it's needed below as the
+            // Stripe Tax calculation's reference - before this invoice (or its number) exists in the
+            // database at all.
+            Id = Guid.NewGuid(),
             TenantId = subscription.TenantId,
             Status = InvoiceStatus.Draft,
             Currency = currency,
             Subtotal = amount,
-            // Modelled but not calculated - see Invoice.TaxTotal. A provider fills this in later; today
-            // every invoice is net-only, and the zero is honest rather than a placeholder for an
-            // unknown figure folded into the total.
+            // Zero unless StripeTaxService finds a billing address to calculate against below - see
+            // Invoice.TaxTotal's remarks. The zero is honest rather than a placeholder: a tenant with
+            // no billing address on file has not had their tax jurisdiction determined at all, not
+            // "determined to owe nothing."
             TaxTotal = 0m,
             Total = amount,
-            Lines =
-            [
-                new InvoiceLine
-                {
-                    Description = description,
-                    ServiceStart = period.StartDate,
-                    ServiceEnd = period.EndDate,
-                    Quantity = period.Quantity,
-                    // What one slot costs over this span, derived from what is actually being charged
-                    // rather than from the catalog - a prorated line's unit price is not the list price.
-                    UnitAmount = period.Quantity > 0 ? Round(amount / period.Quantity) : amount,
-                    Amount = amount,
-                    TaxAmount = 0m,
-                    SubscriptionPeriodId = period.Id
-                }
-            ]
+            Lines = [line]
         };
+
+        // Sales tax, if this tenant has a billing address on file - see StripeTaxService's remarks for
+        // why a failure here is left to propagate rather than swallowed: SubscriptionScheduleService's
+        // own pass already treats "this period didn't get billed this time" as a normal, self-healing
+        // state (see RenewAsync's remarks - the next hourly pass tries again), and issuing an invoice
+        // with silently-wrong ($0) tax on it would be worse than a one-pass delay.
+        var tax = await stripeTax.CalculateAsync(
+            subscription.TenantId, amount, currency, invoice.Id.ToString(), cancellationToken);
+
+        if (tax is not null)
+        {
+            invoice.TaxTotal = tax.TaxAmount;
+            invoice.Total = amount + tax.TaxAmount;
+            invoice.TaxTransactionId = tax.TransactionId;
+            line.TaxAmount = tax.TaxAmount;
+        }
 
         dbContext.Set<Invoice>().Add(invoice);
 

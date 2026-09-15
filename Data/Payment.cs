@@ -88,14 +88,22 @@ public class PaymentAllocation : Entity
     public DateTimeOffset AllocatedOn { get; set; }
 
     /// <summary>
-    /// Set when this allocation is undone by a refund or a chargeback, rather than the row being deleted.
+    /// Set once this allocation has been reversed <em>in full</em> - null while it hasn't been touched
+    /// at all, and still null while only part of it has (see <see cref="ReversedAmount"/>). Deleting the
+    /// row instead would make an invoice reopen with no record of why, and "this was paid and then
+    /// charged back" is precisely what someone looking at an unexpectedly-open invoice needs to be told.
     /// </summary>
-    /// <remarks>
-    /// Reversal is a fact worth keeping. Deleting the row would make an invoice reopen with no record of
-    /// why, and "this was paid and then charged back" is precisely what someone looking at an
-    /// unexpectedly-open invoice needs to be told.
-    /// </remarks>
     public DateTimeOffset? ReversedOn { get; set; }
+
+    /// <summary>
+    /// How much of <see cref="Amount"/> has been given back so far, via one or more partial refunds -
+    /// zero if none has. An allocation is still "live" (available to reverse further) whenever this is
+    /// less than <see cref="Amount"/>, regardless of whether <see cref="ReversedOn"/> is set; the two
+    /// only agree once this reaches <see cref="Amount"/> exactly, which is what actually sets
+    /// <see cref="ReversedOn"/>.
+    /// </summary>
+    [Column(TypeName = "numeric(18,2)")]
+    public decimal ReversedAmount { get; set; }
 }
 
 /// <summary>

@@ -102,6 +102,26 @@ public class Invoice : Entity
     [MaxLength(255)]
     public string? ProviderInvoiceId { get; set; }
 
+    /// <summary>
+    /// Stripe Tax's own transaction id for the tax calculated on this invoice, or <c>null</c> if none
+    /// was calculated (no billing address on file for the tenant - see
+    /// <see cref="TenantBillingAddress"/>'s remarks). Kept so a future refund can reverse the tax
+    /// transaction alongside the payment, rather than only refunding the money and leaving the tax
+    /// remitted on a sale that no longer happened.
+    /// </summary>
+    [MaxLength(255)]
+    public string? TaxTransactionId { get; set; }
+
+    /// <summary>
+    /// When <c>DunningService</c> sent the "payment due soon" reminder for this invoice, or
+    /// <c>null</c> if it hasn't yet. A one-time flag, not a repeatable schedule - unlike the
+    /// PastDue/Suspended escalation (which follows <see cref="Subscription.Status"/> and is naturally
+    /// idempotent because a status transition is a no-op once already there), this reminder doesn't
+    /// change anything else about the invoice, so without its own marker the sweep would re-send it
+    /// every pass for the whole reminder window.
+    /// </summary>
+    public DateTimeOffset? DueSoonReminderSentOn { get; set; }
+
     public ICollection<InvoiceLine> Lines { get; set; } = [];
 
     /// <summary>

@@ -19,17 +19,43 @@ namespace RustArchon.Api.Billing;
 public class PaymentService(
     ApiDbContext dbContext,
     ICommunicationPublisher communicationPublisher,
+    IOrganizationLifecycleService organizationLifecycle,
+    IStripeRefundService stripeRefund,
+    IStripeTaxService stripeTax,
     TimeProvider timeProvider,
     ILogger<PaymentService> logger) : IPaymentService
 {
     /// <inheritdoc />
+    /// <remarks>
+    /// <strong>Idempotent when <paramref name="providerPaymentId"/> is set.</strong> A payment gateway's
+    /// webhook is delivered at-least-once, so the same confirmed payment can arrive here more than
+    /// once - this checks for an existing <see cref="Payment"/> with the same
+    /// <see cref="Payment.ProviderPaymentId"/> first and returns it unchanged rather than allocating the
+    /// same money twice. A manually-entered payment (<paramref name="providerPaymentId"/> null) has no
+    /// such check, and doesn't need one - nothing redelivers a person's own click.
+    /// </remarks>
     public async Task<Payment> RecordPaymentAsync(
         Guid invoiceId, decimal amount, PaymentMethod method, DateTimeOffset? receivedOn,
-        string? reference, CancellationToken cancellationToken = default)
+        string? reference, string? providerPaymentId = null, CancellationToken cancellationToken = default)
     {
         if (amount <= 0m)
         {
             throw new ArgumentOutOfRangeException(nameof(amount), "A payment must be for a positive amount.");
+        }
+
+        if (!string.IsNullOrEmpty(providerPaymentId))
+        {
+            var existing = await dbContext.Set<Payment>()
+                .Include(p => p.Allocations)
+                .FirstOrDefaultAsync(p => p.ProviderPaymentId == providerPaymentId, cancellationToken);
+
+            if (existing is not null)
+            {
+                logger.LogInformation(
+                    "Payment for provider id {ProviderPaymentId} already recorded as {PaymentId}; skipping.",
+                    providerPaymentId, existing.Id);
+                return existing;
+            }
         }
 
         var target = await dbContext.Set<Invoice>()
@@ -50,7 +76,8 @@ public class PaymentService(
             // Trusted from the caller: a bank transfer entered on Friday may have landed on Tuesday, and
             // the aging of everything it settles depends on the real date rather than the typing date.
             ReceivedOn = receivedOn ?? now,
-            Reference = reference
+            Reference = reference,
+            ProviderPaymentId = providerPaymentId
         };
         dbContext.Set<Payment>().Add(payment);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -100,8 +127,48 @@ public class PaymentService(
             method, amount, payment.Currency, payment.TenantId, remaining);
 
         await NotifyReceivedAsync(payment, cancellationToken);
+        await ReactivateIfClearAsync(target.TenantId, cancellationToken);
 
         return payment;
+    }
+
+    /// <summary>
+    /// Moves the tenant back to <see cref="SubscriptionStatus.Active"/> the moment every overdue
+    /// invoice is actually cleared - <see cref="DunningService"/>'s escalation counterpart, but
+    /// immediate rather than waiting out that sweep's next hourly pass. A paying customer's servers
+    /// should come back the moment they've paid, not up to an hour later.
+    /// </summary>
+    /// <remarks>
+    /// A no-op unless the subscription is currently <see cref="SubscriptionStatus.PastDue"/> or
+    /// <see cref="SubscriptionStatus.Suspended"/> - checked first here (rather than relying solely on
+    /// <see cref="IOrganizationLifecycleService.SetStatusAsync"/>'s own no-op-if-already-there guard) so
+    /// the overwhelmingly common case, an on-time payment against an already-Active tenant, costs one
+    /// query instead of two.
+    /// </remarks>
+    private async Task ReactivateIfClearAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        var status = await dbContext.Set<Subscription>()
+            .Where(s => s.TenantId == tenantId && s.EndDate == null)
+            .Select(s => (SubscriptionStatus?)s.Status)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (status is not (SubscriptionStatus.PastDue or SubscriptionStatus.Suspended))
+        {
+            return;
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var stillOverdue = await dbContext.Set<Invoice>()
+            .AnyAsync(i => i.TenantId == tenantId && i.Status == InvoiceStatus.Open
+                && i.DueOn != null && i.DueOn <= now, cancellationToken);
+
+        if (stillOverdue)
+        {
+            return;
+        }
+
+        await organizationLifecycle.SetStatusAsync(
+            tenantId, SubscriptionStatus.Active, "Payment received.", cancellationToken);
     }
 
     /// <summary>
@@ -133,13 +200,25 @@ public class PaymentService(
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <strong>Stripe first, books second.</strong> When this payment was collected through Stripe, the
+    /// actual refund call happens before anything here is touched - if Stripe declines it or the call
+    /// fails outright, this method throws (or Stripe's own exception propagates) and not one row has
+    /// changed. The alternative - reversing the books first and refunding Stripe after - risks a state
+    /// where RustArchon thinks a customer got their money back and Stripe never actually sent it.
+    /// </remarks>
     public async Task<bool> ReversePaymentAsync(
-        Guid paymentId, PaymentStatus status, CancellationToken cancellationToken = default)
+        Guid paymentId, PaymentStatus status, decimal? amount = null, CancellationToken cancellationToken = default)
     {
         if (status is not (PaymentStatus.Refunded or PaymentStatus.Disputed))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(status), "A payment is reversed by refunding or disputing it, nothing else.");
+        }
+
+        if (amount is <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(amount), "A reversal must be for a positive amount.");
         }
 
         var payment = await dbContext.Set<Payment>()
@@ -151,37 +230,94 @@ public class PaymentService(
             return false;
         }
 
-        var now = timeProvider.GetUtcNow();
-        var live = payment.Allocations.Where(a => a.ReversedOn is null).ToList();
-        var invoiceIds = live.Select(a => a.InvoiceId).Distinct().ToList();
+        // Oldest allocation first - the same ordering RecordPaymentAsync's own overpayment spillover
+        // already uses, so which invoice gets a partial reversal applied to it first is at least
+        // predictable rather than arbitrary.
+        var live = payment.Allocations
+            .Where(a => a.ReversedAmount < a.Amount)
+            .OrderBy(a => a.AllocatedOn)
+            .ToList();
 
+        var totalLive = live.Sum(a => a.Amount - a.ReversedAmount);
+        var requestedAmount = amount ?? totalLive;
+
+        if (requestedAmount > totalLive)
+        {
+            return false;
+        }
+
+        var invoiceIds = live.Select(a => a.InvoiceId).Distinct().ToList();
         var invoices = await dbContext.Set<Invoice>()
             .Where(i => invoiceIds.Contains(i.Id))
             .ToDictionaryAsync(i => i.Id, cancellationToken);
 
+        // Stripe first - see this method's own remarks. Nothing below runs at all if this throws.
+        if (!string.IsNullOrEmpty(payment.ProviderPaymentId) && payment.Method == PaymentMethod.Card)
+        {
+            await stripeRefund.RefundAsync(payment.ProviderPaymentId, requestedAmount, cancellationToken);
+        }
+
+        var now = timeProvider.GetUtcNow();
+
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var remaining = requestedAmount;
+        var touched = 0;
 
         foreach (var allocation in live)
         {
-            // Stamped rather than deleted: an invoice that reopens with no record of why is the state
-            // this whole model exists to avoid.
-            allocation.ReversedOn = now;
+            if (remaining <= 0m)
+            {
+                break;
+            }
+
+            var availableOnThisAllocation = allocation.Amount - allocation.ReversedAmount;
+            var reverseNow = Math.Min(remaining, availableOnThisAllocation);
+
+            allocation.ReversedAmount += reverseNow;
+            if (allocation.ReversedAmount >= allocation.Amount)
+            {
+                allocation.ReversedOn = now;
+            }
 
             if (invoices.TryGetValue(allocation.InvoiceId, out var invoice))
             {
-                invoice.AmountPaid -= allocation.Amount;
+                invoice.AmountPaid -= reverseNow;
                 Settle(invoice);
+
+                if (!string.IsNullOrEmpty(invoice.TaxTransactionId))
+                {
+                    // Stripe determines the tax-vs-base split of reverseNow itself - see
+                    // IStripeTaxService.ReverseAsync's own remarks. A unique reference every time,
+                    // since Stripe refuses a repeated one - the allocation's own id plus how much of
+                    // its running reversal total this call reaches is enough to make each reversal
+                    // event distinct even across several partial refunds against the same allocation.
+                    await stripeTax.ReverseAsync(
+                        invoice.TaxTransactionId, reverseNow,
+                        referenceId: $"{allocation.Id}-reversal-{allocation.ReversedAmount:F2}",
+                        cancellationToken);
+                }
             }
+
+            remaining -= reverseNow;
+            touched++;
         }
 
-        payment.Status = status;
+        // Only once every dollar this payment ever settled has actually been reversed - a partial
+        // refund leaves the payment Succeeded, same as Stripe's own Charge.status does, since it is
+        // still fundamentally the payment that happened, just partly given back.
+        var fullyReversed = payment.Allocations.Sum(a => a.ReversedAmount) >= payment.Amount;
+        if (fullyReversed)
+        {
+            payment.Status = status;
+        }
 
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         logger.LogInformation(
-            "Payment {PaymentId} marked {Status}; {Count} allocation(s) reversed.",
-            paymentId, status, live.Count);
+            "Payment {PaymentId}: reversed {Amount} across {Count} allocation(s){Fully}.",
+            paymentId, requestedAmount, touched, fullyReversed ? $" (now fully {status})" : " (partial)");
 
         return true;
     }
@@ -374,7 +510,8 @@ public class PaymentService(
                     AppliedOn = a.Payment.ReceivedOn,
                     Method = a.Payment.Method,
                     Reference = a.Payment.Reference,
-                    ReversedOn = a.ReversedOn
+                    ReversedOn = a.ReversedOn,
+                    ReversedAmount = a.ReversedAmount
                 })
                 .Concat(credits
                     .Where(c => c.AppliedToInvoiceId == i.Id)

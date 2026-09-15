@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using JumpStart.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using RustArchon.Api.Billing;
 using JumpStart.Authorization;
 using RustArchon.Api.Infrastructure;
@@ -44,6 +45,8 @@ namespace RustArchon.Api.Controllers;
 [Authorize]
 public class SubscriptionController(
     ISubscriptionService subscriptionService,
+    IStripeCheckoutService checkoutService,
+    IOptions<StripeOptions> stripeOptions,
     ITenantContext tenantContext) : ControllerBase
 {
     /// <summary>The caller's current subscription, including any change already scheduled.</summary>
@@ -74,6 +77,31 @@ public class SubscriptionController(
         }
 
         return Ok(await subscriptionService.GetBillingHistoryAsync(tenantId, cancellationToken));
+    }
+
+    /// <summary>
+    /// Starts a Stripe-hosted checkout for one of the caller's own open invoices - see
+    /// <see cref="IStripeCheckoutService"/>'s remarks. <see cref="PermissionCatalog.SubscriptionManage"/>,
+    /// not <c>SubscriptionView</c> - paying money is an action, not a read.
+    /// </summary>
+    /// <returns>The Stripe-hosted URL to redirect the browser to.</returns>
+    [RequirePermission(PermissionCatalog.SubscriptionManage)]
+    [HttpPost("invoices/{invoiceId:guid}/checkout-session")]
+    public async Task<ActionResult<string>> CreateCheckoutSession(Guid invoiceId, CancellationToken cancellationToken)
+    {
+        if (await tenantContext.GetCurrentTenantIdAsync() is not { } tenantId)
+        {
+            return Forbid();
+        }
+
+        var panelBaseUrl = stripeOptions.Value.PanelBaseUrl.TrimEnd('/');
+        var url = await checkoutService.CreateCheckoutSessionAsync(
+            tenantId, invoiceId,
+            successUrl: $"{panelBaseUrl}/Account/BillingHistory?paid=1",
+            cancelUrl: $"{panelBaseUrl}/Account/BillingHistory",
+            cancellationToken);
+
+        return url is null ? BadRequest("That invoice can't be paid right now.") : Ok(url);
     }
 
     /// <summary>

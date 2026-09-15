@@ -258,9 +258,44 @@ builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 // today - a provider adapter calls these same methods rather than inventing a second path to the tables.
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 
+// Stripe Checkout (payment mode only - see StripeCheckoutService's remarks for why never Stripe's own
+// Subscriptions/Billing product). No :?required guard - see StripeOptions' own remarks: nothing at
+// startup calls Stripe, so a deployment that hasn't configured this yet still starts fine.
+builder.Services.Configure<StripeOptions>(options =>
+{
+    options.SecretKey = builder.Configuration["STRIPE_SECRET_KEY"] ?? string.Empty;
+    options.WebhookSecret = builder.Configuration["STRIPE_WEBHOOK_SECRET"] ?? string.Empty;
+    options.PanelBaseUrl = builder.Configuration["CorsSettings:BlazorServerUrl"] ?? "https://localhost:7199";
+});
+builder.Services.AddScoped<IStripeCheckoutService, StripeCheckoutService>();
+
+// Sales tax via Stripe Tax - see StripeTaxService's own remarks (one tax code for everything RustArchon
+// sells, calculation+transaction in one call, failures left to propagate). Registered before
+// IInvoiceService below since that's the one caller.
+builder.Services.AddScoped<IStripeTaxService, StripeTaxService>();
+
+// Refunding a Stripe-collected payment - see IStripeRefundService's own remarks on why this
+// deliberately assumes every refund resolves synchronously (true of every payment method this
+// codebase currently collects through).
+builder.Services.AddScoped<IStripeRefundService, StripeRefundService>();
+
 // Applies scheduled (deferred) plan changes and rolls billing periods over when they end. Load-bearing
 // rather than housekeeping - every downgrade is deferred, so without this they'd never take effect.
 builder.Services.AddHostedService<SubscriptionScheduleService>();
+
+// Chases unpaid invoices: due-soon reminder, past-due notice with a suspension countdown, then the
+// suspension itself if it's still unpaid - see DunningService's own remarks for why this is a separate
+// sweep from SubscriptionScheduleService above rather than a third pass bolted onto it. Depends on
+// IOrganizationLifecycleService, registered further below - fine for DI (resolved lazily, not by
+// registration order), listed here only because this is where its sibling hosted services live.
+builder.Services.AddHostedService<DunningService>();
+
+// Once a day, emails whoever is configured in ComplianceNotificationEmail a digest of jurisdictions
+// currently blocking a tenant's invoice for lack of a Stripe tax registration - see
+// BlockedInvoiceIssuance, written by SubscriptionScheduleService above whenever it catches a
+// TaxJurisdictionUnregisteredException. A no-op pass whenever that setting is blank or nothing is
+// currently blocked.
+builder.Services.AddHostedService<NexusComplianceNotificationService>();
 
 // ============================================
 // 4e. REPORTING

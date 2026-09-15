@@ -26,6 +26,10 @@
     <!-- Pinned to the last open-source MassTransit release - v9 is commercial. See README. -->
     <PackageReference Include="MassTransit" Version="[8.5.10]" />
     <PackageReference Include="MassTransit.RabbitMQ" Version="[8.5.10]" />
+    <!-- Stripe Checkout only (payment mode, one already-priced invoice at a time) - never Stripe's own
+         Subscriptions/Billing product, which can't express PlanChangeCalculator's proration model. See
+         StripeCheckoutService's remarks. -->
+    <PackageReference Include="Stripe.net" Version="48.5.0" />
   </ItemGroup>
 
   <ItemGroup>

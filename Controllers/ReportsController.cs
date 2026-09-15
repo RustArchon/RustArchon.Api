@@ -119,6 +119,12 @@ public class ReportsController(IReportingService reportingService) : ControllerB
         Ok(await reportingService.GetDelinquentAccountsAsync(
             minOutstanding, overdueOnly ?? true, cancellationToken));
 
+    /// <summary>Jurisdictions currently blocking an invoice for lack of a Stripe tax registration.</summary>
+    [HttpGet("blocked-invoices")]
+    public async Task<ActionResult<ReportResult<BlockedInvoiceJurisdictionRowDto>>> GetBlockedInvoices(
+        CancellationToken cancellationToken) =>
+        Ok(await reportingService.GetBlockedInvoicesAsync(cancellationToken));
+
     /// <summary>The plans offered as a dropdown filter on the reports that take one.</summary>
     [HttpGet("plan-options")]
     public async Task<ActionResult<IReadOnlyList<ReportFilterOptionDto>>> GetPlanOptions(

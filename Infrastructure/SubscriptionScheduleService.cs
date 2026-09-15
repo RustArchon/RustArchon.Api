@@ -141,8 +141,89 @@ public class SubscriptionScheduleService(
 
         foreach (var tenantId in tenantIds.OrderBy(id => id))
         {
-            await AdvanceAsync(dbContext, subscriptions, invoices, compression, tenantId, now, cancellationToken);
+            try
+            {
+                await AdvanceAsync(dbContext, subscriptions, invoices, compression, tenantId, now, cancellationToken);
+                await ClearBlockedAsync(dbContext, tenantId, cancellationToken);
+            }
+            catch (Billing.TaxJurisdictionUnregisteredException ex)
+            {
+                // Expected, ongoing operational state, not a bug - see BlockedInvoiceIssuance's own
+                // remarks. Recorded rather than just logged so the admin banner and the daily digest
+                // (NexusComplianceNotificationService) both have something to read, and so a site admin
+                // finds out without needing to watch the logs.
+                await RecordBlockedAsync(dbContext, tenantId, ex.Country, ex.State, now, cancellationToken);
+                logger.LogWarning(
+                    "Tenant {TenantId}'s invoice is blocked - {Message}", tenantId, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                // One tenant's failure - transient or otherwise - must never stop the rest of this pass
+                // from being examined. Previously an unhandled exception here propagated all the way out
+                // of RunPassAsync, silently skipping every tenant still left in tenantIds until the next
+                // hourly tick; logging and continuing here is what actually delivers the "the next pass
+                // tries again" self-healing promise the rest of this file already describes.
+                logger.LogError(
+                    ex, "Advancing subscription schedule for tenant {TenantId} failed; will retry next pass.",
+                    tenantId);
+            }
         }
+    }
+
+    /// <summary>
+    /// Upserts the blocked-invoice record for <paramref name="tenantId"/> - creates it on the first
+    /// failure, otherwise just advances <see cref="Data.BlockedInvoiceIssuance.LastAttemptOn"/>/
+    /// <see cref="Data.BlockedInvoiceIssuance.AttemptCount"/> so <see cref="Data.BlockedInvoiceIssuance.FirstBlockedOn"/>
+    /// keeps telling the truth about how long this has been going on.
+    /// </summary>
+    private static async Task RecordBlockedAsync(
+        ApiDbContext dbContext, Guid tenantId, string country, string? state, DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var blocked = await dbContext.Set<Data.BlockedInvoiceIssuance>()
+            .FirstOrDefaultAsync(b => b.TenantId == tenantId, cancellationToken);
+
+        if (blocked is null)
+        {
+            dbContext.Set<Data.BlockedInvoiceIssuance>().Add(new Data.BlockedInvoiceIssuance
+            {
+                TenantId = tenantId,
+                Country = country,
+                State = state,
+                FirstBlockedOn = now,
+                LastAttemptOn = now,
+                AttemptCount = 1
+            });
+        }
+        else
+        {
+            // The jurisdiction can shift between attempts (a billing address edited mid-block), so it's
+            // refreshed too - FirstBlockedOn intentionally isn't, since it answers "how long", not
+            // "where, most recently".
+            blocked.Country = country;
+            blocked.State = state;
+            blocked.LastAttemptOn = now;
+            blocked.AttemptCount++;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>Removes any blocked-invoice record for a tenant whose pass just succeeded - a no-op for
+    /// the overwhelmingly common case where none exists.</summary>
+    private static async Task ClearBlockedAsync(
+        ApiDbContext dbContext, Guid tenantId, CancellationToken cancellationToken)
+    {
+        var blocked = await dbContext.Set<Data.BlockedInvoiceIssuance>()
+            .FirstOrDefaultAsync(b => b.TenantId == tenantId, cancellationToken);
+
+        if (blocked is null)
+        {
+            return;
+        }
+
+        dbContext.Set<Data.BlockedInvoiceIssuance>().Remove(blocked);
+        await dbContext.SaveChangesAsync(cancellationToken);
     }
 
     /// <summary>
@@ -182,6 +263,18 @@ public class SubscriptionScheduleService(
         {
             return;
         }
+
+        // Retry a period that already exists but was never successfully billed - the case RenewAsync's
+        // own remarks describe ("the period still exists and the next pass finds it unbilled and issues
+        // then"), which without this call doesn't actually happen: PeriodEnd is set the moment the
+        // period is created, before IssueForPeriodAsync ever runs, so by the time a failure could occur
+        // it's already in the future and the renewal check below (current.PeriodEnd <= now) would not
+        // consider it due again until a whole term later. IssueForPeriodAsync is idempotent by design
+        // (see HasBeenBilledAsync), so this costs nothing beyond one query on the ordinary, already-billed
+        // path.
+        await invoices.IssueForPeriodAsync(
+            current, current.EarnedAmount, PeriodDescription(current.Subscription.Plan.Name, current),
+            cancellationToken);
 
         var blockedChangeIds = new HashSet<Guid>();
 

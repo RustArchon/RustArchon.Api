@@ -39,22 +39,49 @@ public interface IPaymentService
     /// it would mean rejecting a real bank transfer because it did not match a figure exactly, which is
     /// the sort of rule that gets worked around with spreadsheets.
     /// </remarks>
+    /// <param name="providerPaymentId">
+    /// A payment gateway's own id for this payment (e.g. a Stripe PaymentIntent id), when one exists -
+    /// null for a manually-entered payment. When set, this call is idempotent against redelivery: a
+    /// second call with the same <paramref name="providerPaymentId"/> returns the payment already
+    /// recorded rather than recording a duplicate - see <c>PaymentService.RecordPaymentAsync</c>'s
+    /// remarks. A webhook adapter's whole job is passing this through; nothing else in this codebase
+    /// has one to give.
+    /// </param>
     /// <returns>The payment, with its allocations.</returns>
     Task<Payment> RecordPaymentAsync(
         Guid invoiceId, decimal amount, PaymentMethod method, DateTimeOffset? receivedOn,
-        string? reference, CancellationToken cancellationToken = default);
+        string? reference, string? providerPaymentId = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Undoes a payment - a refund or a chargeback - by reversing its allocations rather than editing
-    /// anything it settled.
+    /// Undoes some or all of a payment - a refund or a chargeback - by reversing its allocations rather
+    /// than editing anything it settled.
     /// </summary>
     /// <remarks>
-    /// Every invoice it touched recalculates and reopens if it is owed again. The allocation rows stay,
-    /// stamped with when they were reversed, because "this was paid and then charged back" is exactly
-    /// what someone looking at an unexpectedly-open invoice needs to be told.
+    /// <para>
+    /// Every invoice it touched recalculates and reopens if it is owed again. The allocation rows stay;
+    /// what changes is <see cref="PaymentAllocation.ReversedAmount"/>, because "this was paid and then
+    /// (fully or partly) charged back" is exactly what someone looking at an unexpectedly-open invoice
+    /// needs to be told.
+    /// </para>
+    /// <para>
+    /// For a payment collected through Stripe (<see cref="Payment.ProviderPaymentId"/> set), this also
+    /// calls Stripe's own Refund API - and, for any invoice with a
+    /// <see cref="Invoice.TaxTransactionId"/>, reverses the matching share of tax too - before touching
+    /// this codebase's own books, never after. See <c>PaymentService</c>'s own remarks for why a Stripe
+    /// failure here must leave the books exactly as they were, not partially updated.
+    /// </para>
     /// </remarks>
+    /// <param name="amount">
+    /// How much to reverse, or <c>null</c> to reverse everything still live on this payment (its full
+    /// remaining, un-reversed total - not necessarily its original <see cref="Payment.Amount"/>, if an
+    /// earlier partial reversal already happened). Multiple partial reversals against the same payment
+    /// are allowed, applied oldest-allocation-first, the same ordering
+    /// <see cref="RecordPaymentAsync"/>'s own overpayment spillover already uses.
+    /// </param>
+    /// <returns><c>false</c> when the payment doesn't exist, isn't currently <see cref="PaymentStatus.Succeeded"/>,
+    /// or <paramref name="amount"/> exceeds what's still live to reverse.</returns>
     Task<bool> ReversePaymentAsync(
-        Guid paymentId, PaymentStatus status, CancellationToken cancellationToken = default);
+        Guid paymentId, PaymentStatus status, decimal? amount = null, CancellationToken cancellationToken = default);
 
     /// <summary>Grants value back against an invoice without money moving.</summary>
     Task<CreditNote?> IssueCreditNoteAsync(

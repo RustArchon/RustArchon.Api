@@ -783,6 +783,54 @@ public class ReportingService(ApiDbContext dbContext, TimeProvider timeProvider)
         rows.Where(r => r.Bucket == bucket).Sum(r => r.Outstanding);
 
     // ---------------------------------------------------------------------------------------------
+    // Blocked invoices (nexus / tax registration)
+    // ---------------------------------------------------------------------------------------------
+
+    /// <inheritdoc />
+    public async Task<ReportResult<BlockedInvoiceJurisdictionRowDto>> GetBlockedInvoicesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        var blocked = await dbContext.Set<BlockedInvoiceIssuance>()
+            .Take(MaxRows + 1)
+            .ToListAsync(cancellationToken);
+
+        var truncated = Trim(blocked);
+
+        var rows = blocked
+            .GroupBy(b => (b.Country, b.State))
+            .Select(g => new BlockedInvoiceJurisdictionRowDto
+            {
+                Country = g.Key.Country,
+                State = g.Key.State,
+                OrganizationCount = g.Count(),
+                OldestBlockedOn = g.Min(b => b.FirstBlockedOn)
+            })
+            .OrderBy(r => r.OldestBlockedOn)
+            .ToList();
+
+        var summary = new List<ReportSummaryValueDto>
+        {
+            Count("Jurisdictions", rows.Count, "jurisdiction", "jurisdictions"),
+            new()
+            {
+                Label = "Organizations blocked",
+                Value = rows.Sum(r => r.OrganizationCount).ToString("N0", Money),
+                Detail = "can't be invoiced until registered"
+            },
+            new()
+            {
+                Label = "Longest blocked",
+                Value = rows.Count == 0 ? "—" : $"{WholeDays(now - rows.Min(r => r.OldestBlockedOn))}d",
+                Detail = "register in Stripe's Tax settings to resolve"
+            }
+        };
+
+        return Result(rows, summary, now, truncated);
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Filter options
     // ---------------------------------------------------------------------------------------------
 

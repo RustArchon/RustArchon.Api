@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Administration;
+using RustArchon.Api.Billing;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Security;
@@ -43,6 +44,7 @@ public class InternalController : ControllerBase
     private readonly IOrganizationProvisioningService _provisioning;
     private readonly ApiDbContext _dbContext;
     private readonly Infrastructure.ObjectStorage.IObjectStorage _objectStorage;
+    private readonly IPaymentService _paymentService;
 
     public InternalController(
         IPublishEndpoint publishEndpoint,
@@ -54,7 +56,8 @@ public class InternalController : ControllerBase
         ICommunicationRepository communicationRepository,
         IOrganizationProvisioningService provisioning,
         ApiDbContext dbContext,
-        Infrastructure.ObjectStorage.IObjectStorage objectStorage)
+        Infrastructure.ObjectStorage.IObjectStorage objectStorage,
+        IPaymentService paymentService)
     {
         _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
         _rustServerRepository = rustServerRepository ?? throw new ArgumentNullException(nameof(rustServerRepository));
@@ -66,6 +69,7 @@ public class InternalController : ControllerBase
         _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
         _objectStorage = objectStorage ?? throw new ArgumentNullException(nameof(objectStorage));
+        _paymentService = paymentService ?? throw new ArgumentNullException(nameof(paymentService));
     }
 
     /// <summary>
@@ -222,6 +226,39 @@ public class InternalController : ControllerBase
             ApiKey: Decrypt(PlatformSettingsRegistry.EmailApiKey, ApiKeyProtectorPurposes.EmailApiKey),
             DefaultFromAddress: Value(PlatformSettingsRegistry.EmailDefaultFromAddress),
             DefaultFromName: Value(PlatformSettingsRegistry.EmailDefaultFromName));
+    }
+
+    /// <summary>
+    /// Records a Stripe-confirmed payment against an invoice - called by RustArchon.Panel's own public
+    /// Stripe webhook route once it has verified the event's signature and confirmed the Checkout
+    /// Session actually completed as paid. This Api never talks to Stripe's inbound webhook directly
+    /// (see <see cref="RecordStripePaymentRequestDto"/>'s remarks) - by the time this is called, Stripe
+    /// itself is out of the picture and this is exactly a payment being recorded, same as
+    /// <c>BillingController.RecordPayment</c>'s manual-entry path, just with a
+    /// <see cref="RecordStripePaymentRequestDto.ProviderPaymentId"/> attached for idempotency against
+    /// Stripe's at-least-once delivery.
+    /// </summary>
+    [HttpPost("stripe/payments")]
+    public async Task<IActionResult> RecordStripePayment(
+        [FromBody] RecordStripePaymentRequestDto request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _paymentService.RecordPaymentAsync(
+                request.InvoiceId, request.Amount, PaymentMethod.Card, receivedOn: null,
+                reference: request.ProviderPaymentId, providerPaymentId: request.ProviderPaymentId,
+                cancellationToken: cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            // The invoice named in a webhook payload no longer exists - can't happen through this
+            // codebase's own checkout-session creation, but the Panel's webhook route is handling
+            // external input regardless of how the payload was produced. 404, not 500: there is nothing
+            // wrong with this Api, and Panel's own logging is where the real diagnosis happens.
+            return NotFound();
+        }
+
+        return Accepted();
     }
 
     /// <summary>

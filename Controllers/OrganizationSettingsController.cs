@@ -61,7 +61,9 @@ public class OrganizationSettingsController(
         }
 
         return await settings.UpdateAsync(
-            tenantId, request.Name.Trim(), request.ContactEmail?.Trim(), cancellationToken)
+            tenantId, request.Name.Trim(), request.ContactEmail?.Trim(),
+            request.BillingLine1, request.BillingLine2, request.BillingCity, request.BillingState,
+            request.BillingPostalCode, request.BillingCountry, cancellationToken)
             ? NoContent()
             : NotFound();
     }
