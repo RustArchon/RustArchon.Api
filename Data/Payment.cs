@@ -57,6 +57,21 @@ public class Payment : Entity
     [MaxLength(255)]
     public string? ProviderPaymentId { get; set; }
 
+    /// <summary>
+    /// The payment provider's own id for the specific event that produced this row (a Stripe
+    /// <c>evt_...</c> id), set only for a <see cref="PaymentStatus.Failed"/> row recorded from a webhook.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="ProviderPaymentId"/> on purpose: a Stripe PaymentIntent can fail more
+    /// than once (a customer retries with a different card on the same Checkout Session), so deduping a
+    /// failure by <see cref="ProviderPaymentId"/> the way <c>PaymentService.RecordPaymentAsync</c> dedupes
+    /// a success would silently drop every failure after the first genuinely distinct decline on the same
+    /// PaymentIntent. A webhook's own event id is unique per occurrence, including redelivery of the
+    /// identical event, which is exactly the idempotency key a failure needs.
+    /// </remarks>
+    [MaxLength(255)]
+    public string? ProviderEventId { get; set; }
+
     /// <summary>Optional note for a manually-recorded payment - a cheque number, a bank reference.</summary>
     [MaxLength(500)]
     public string? Reference { get; set; }

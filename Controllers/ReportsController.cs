@@ -125,6 +125,21 @@ public class ReportsController(IReportingService reportingService) : ControllerB
         CancellationToken cancellationToken) =>
         Ok(await reportingService.GetBlockedInvoicesAsync(cancellationToken));
 
+    /// <summary>Every payment attempt (successful or failed) between <paramref name="from"/> and
+    /// <paramref name="to"/>, optionally narrowed to one status.</summary>
+    [HttpGet("payment-ledger")]
+    public async Task<ActionResult<ReportResult<PaymentLedgerRowDto>>> GetPaymentLedger(
+        [FromQuery] DateOnly from, [FromQuery] DateOnly to, [FromQuery] PaymentStatus? status,
+        CancellationToken cancellationToken)
+    {
+        if (InvalidRange(from, to, out var error))
+        {
+            return error;
+        }
+
+        return Ok(await reportingService.GetPaymentLedgerAsync(from, to, status, cancellationToken));
+    }
+
     /// <summary>The plans offered as a dropdown filter on the reports that take one.</summary>
     [HttpGet("plan-options")]
     public async Task<ActionResult<IReadOnlyList<ReportFilterOptionDto>>> GetPlanOptions(

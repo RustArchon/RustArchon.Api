@@ -132,6 +132,56 @@ public class PaymentService(
         return payment;
     }
 
+    /// <inheritdoc />
+    public async Task<Payment?> RecordFailedPaymentAsync(
+        Guid invoiceId, decimal amount, PaymentMethod method, string providerPaymentId, string providerEventId,
+        string? failureCode, string? failureMessage, CancellationToken cancellationToken = default)
+    {
+        var existing = await dbContext.Set<Payment>()
+            .FirstOrDefaultAsync(p => p.ProviderEventId == providerEventId, cancellationToken);
+
+        if (existing is not null)
+        {
+            logger.LogInformation(
+                "Failed payment for event {ProviderEventId} already recorded as {PaymentId}; skipping.",
+                providerEventId, existing.Id);
+            return null;
+        }
+
+        var invoice = await dbContext.Set<Invoice>()
+            .FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken);
+
+        if (invoice is null)
+        {
+            logger.LogWarning(
+                "A Stripe payment failure named invoice {InvoiceId}, which doesn't exist - not recorded.",
+                invoiceId);
+            return null;
+        }
+
+        var payment = new Payment
+        {
+            TenantId = invoice.TenantId,
+            Amount = amount,
+            Currency = invoice.Currency,
+            Status = PaymentStatus.Failed,
+            Method = method,
+            ReceivedOn = timeProvider.GetUtcNow(),
+            FailureCode = failureCode,
+            FailureMessage = failureMessage,
+            ProviderPaymentId = providerPaymentId,
+            ProviderEventId = providerEventId
+        };
+        dbContext.Set<Payment>().Add(payment);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Recorded failed {Method} payment of {Amount} {Currency} for tenant {TenantId}: {FailureCode} - {FailureMessage}",
+            method, amount, payment.Currency, payment.TenantId, failureCode, failureMessage);
+
+        return payment;
+    }
+
     /// <summary>
     /// Moves the tenant back to <see cref="SubscriptionStatus.Active"/> the moment every overdue
     /// invoice is actually cleared - <see cref="DunningService"/>'s escalation counterpart, but

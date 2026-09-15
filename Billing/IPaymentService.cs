@@ -53,6 +53,25 @@ public interface IPaymentService
         string? reference, string? providerPaymentId = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Records a payment attempt that failed - a decline, not money received. Never allocates anything
+    /// and never changes what an invoice owes: nothing arrived, so nothing settles.
+    /// </summary>
+    /// <remarks>
+    /// Exists so a decline is diagnosable and visible on the Payment Ledger report, rather than
+    /// disappearing the moment Stripe Checkout shows the customer an error and they either retry or give
+    /// up. Idempotent by <paramref name="providerEventId"/> (a webhook's own event id), not by
+    /// <paramref name="providerPaymentId"/> - see <see cref="Payment.ProviderEventId"/>'s own remarks for
+    /// why those need to be different keys here specifically.
+    /// </remarks>
+    /// <param name="invoiceId">The invoice the attempt was for - used only to resolve the tenant and
+    /// currency; the invoice itself is never touched.</param>
+    /// <returns>The failed <see cref="Payment"/> row, or <c>null</c> if the invoice doesn't exist or this
+    /// exact <paramref name="providerEventId"/> was already recorded.</returns>
+    Task<Payment?> RecordFailedPaymentAsync(
+        Guid invoiceId, decimal amount, PaymentMethod method, string providerPaymentId, string providerEventId,
+        string? failureCode, string? failureMessage, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Undoes some or all of a payment - a refund or a chargeback - by reversing its allocations rather
     /// than editing anything it settled.
     /// </summary>

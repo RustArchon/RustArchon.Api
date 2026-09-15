@@ -262,6 +262,27 @@ public class InternalController : ControllerBase
     }
 
     /// <summary>
+    /// Records a Stripe payment-attempt failure - called by RustArchon.Panel's own public Stripe webhook
+    /// route on a verified <c>payment_intent.payment_failed</c> event. Never allocates anything and
+    /// never touches the invoice named; it exists purely so the decline is visible on the Payment Ledger
+    /// report - see <see cref="IPaymentService.RecordFailedPaymentAsync"/>'s own remarks.
+    /// </summary>
+    [HttpPost("stripe/payments/failed")]
+    public async Task<IActionResult> RecordFailedStripePayment(
+        [FromBody] RecordFailedStripePaymentRequestDto request, CancellationToken cancellationToken)
+    {
+        await _paymentService.RecordFailedPaymentAsync(
+            request.InvoiceId, request.Amount, PaymentMethod.Card, request.ProviderPaymentId,
+            request.ProviderEventId, request.FailureCode, request.FailureMessage, cancellationToken);
+
+        // Unlike RecordStripePayment, a missing invoice and an already-recorded event both come back as
+        // null rather than an exception - neither is this Api being asked to do something invalid, both
+        // are "there's nothing new to record", so both get the same 202 rather than one of them being a
+        // 404 someone has to explain.
+        return Accepted();
+    }
+
+    /// <summary>
     /// One file from a theme's package, by the same relative path it was uploaded under (e.g.
     /// <c>theme.css</c>, <c>images/hero.png</c>) - called by RustArchon.Panel's own public
     /// <c>/theme-assets/...</c> route, the seam a browser's anonymous, same-origin

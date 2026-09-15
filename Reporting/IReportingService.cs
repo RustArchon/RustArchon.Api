@@ -105,6 +105,15 @@ public interface IReportingService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Every payment attempt - successful or failed - received between <paramref name="from"/> and
+    /// <paramref name="to"/> inclusive, newest first. The processor reconciliation report (cross-check
+    /// against Stripe's own dashboard/export by <c>ProviderPaymentId</c>) and the failed-charge report
+    /// are the same underlying data, filtered by <paramref name="status"/>.
+    /// </summary>
+    Task<ReportResult<PaymentLedgerRowDto>> GetPaymentLedgerAsync(
+        DateOnly from, DateOnly to, PaymentStatus? status = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The plans available as a dropdown filter on the reports that take one - every plan any
     /// Organization is or has been on, plus every active plan.
     /// </summary>

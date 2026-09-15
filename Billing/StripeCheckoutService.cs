@@ -106,7 +106,14 @@ public class StripeCheckoutService(
                     }
                 }
             ],
-            Metadata = new Dictionary<string, string> { ["InvoiceId"] = invoiceId.ToString() }
+            Metadata = new Dictionary<string, string> { ["InvoiceId"] = invoiceId.ToString() },
+            // Session-level Metadata (above) is NOT copied onto the underlying PaymentIntent by Stripe -
+            // verified against Stripe's own docs, not assumed. Without this, a payment_intent.payment_failed
+            // webhook (which carries the PaymentIntent, not the Session) would have no InvoiceId to act on.
+            PaymentIntentData = new SessionPaymentIntentDataOptions
+            {
+                Metadata = new Dictionary<string, string> { ["InvoiceId"] = invoiceId.ToString() }
+            }
         };
 
         var session = await new SessionService().CreateAsync(sessionOptions, requestOptions, cancellationToken);

@@ -831,6 +831,73 @@ public class ReportingService(ApiDbContext dbContext, TimeProvider timeProvider)
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Payment ledger (processor reconciliation / failed charges)
+    // ---------------------------------------------------------------------------------------------
+
+    /// <inheritdoc />
+    public async Task<ReportResult<PaymentLedgerRowDto>> GetPaymentLedgerAsync(
+        DateOnly from, DateOnly to, PaymentStatus? status = null, CancellationToken cancellationToken = default)
+    {
+        var now = timeProvider.GetUtcNow();
+        var (fromInstant, toExclusive) = Window(from, to);
+
+        var payments = await dbContext.Set<Payment>()
+            .Include(p => p.Tenant)
+            .Include(p => p.Allocations).ThenInclude(a => a.Invoice)
+            .Where(p => p.ReceivedOn >= fromInstant && p.ReceivedOn < toExclusive
+                        && (status == null || p.Status == status))
+            .OrderByDescending(p => p.ReceivedOn)
+            .Take(MaxRows + 1)
+            .ToListAsync(cancellationToken);
+
+        var truncated = Trim(payments);
+
+        var rows = payments.Select(p => new PaymentLedgerRowDto
+        {
+            PaymentId = p.Id,
+            TenantId = p.TenantId,
+            OrganizationName = p.Tenant.Name,
+            ContactEmail = p.Tenant.ContactEmail,
+            Status = p.Status,
+            Method = p.Method,
+            Amount = p.Amount,
+            Currency = p.Currency,
+            ReceivedOn = p.ReceivedOn,
+            ProviderPaymentId = p.ProviderPaymentId,
+            Reference = p.Reference,
+            FailureCode = p.FailureCode,
+            FailureMessage = p.FailureMessage,
+            InvoiceNumbers = string.Join(", ", p.Allocations
+                .Select(a => a.Invoice.Number)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .Distinct())
+        }).ToList();
+
+        var succeeded = rows.Where(r => r.Status == PaymentStatus.Succeeded).ToList();
+        var failed = rows.Count(r => r.Status == PaymentStatus.Failed);
+        var attempts = succeeded.Count + failed;
+
+        var summary = new List<ReportSummaryValueDto>
+        {
+            Count("Payments", rows.Count, "attempt", "attempts"),
+            new()
+            {
+                Label = "Collected",
+                Value = succeeded.Sum(r => r.Amount).ToString("C", Money),
+                Detail = Count(succeeded.Count, "successful payment", "successful payments")
+            },
+            new()
+            {
+                Label = "Failed",
+                Value = failed.ToString("N0", Money),
+                Detail = attempts == 0 ? "no attempts in this window" : $"{(decimal)failed / attempts:P0} of attempts"
+            }
+        };
+
+        return Result(rows, summary, now, truncated);
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Filter options
     // ---------------------------------------------------------------------------------------------
 
