@@ -140,6 +140,13 @@ public class ReportsController(IReportingService reportingService) : ControllerB
         return Ok(await reportingService.GetPaymentLedgerAsync(from, to, status, cancellationToken));
     }
 
+    /// <summary>Groups of Organizations sharing a server or contact email where at least one has
+    /// redeemed a discount - a flag for manual review, never an automatic decision.</summary>
+    [HttpGet("discount-abuse")]
+    public async Task<ActionResult<ReportResult<DiscountAbuseSignalRowDto>>> GetDiscountAbuseSignals(
+        CancellationToken cancellationToken) =>
+        Ok(await reportingService.GetDiscountAbuseSignalsAsync(cancellationToken));
+
     /// <summary>The plans offered as a dropdown filter on the reports that take one.</summary>
     [HttpGet("plan-options")]
     public async Task<ActionResult<IReadOnlyList<ReportFilterOptionDto>>> GetPlanOptions(

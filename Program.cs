@@ -285,6 +285,11 @@ builder.Services.AddScoped<IStripeRefundService, StripeRefundService>();
 builder.Services.AddScoped<IStripeDisputeService, StripeDisputeService>();
 builder.Services.AddScoped<IChargebackEvidenceService, ChargebackEvidenceService>();
 
+// The discount catalog and redemption - see DiscountService's own remarks. Read from
+// InvoiceService.IssueForPeriodAsync directly (via ApiDbContext, not this interface), which stays true
+// to "an issued invoice is immutable" without needing IDiscountService to know anything about invoicing.
+builder.Services.AddScoped<IDiscountService, DiscountService>();
+
 // Applies scheduled (deferred) plan changes and rolls billing periods over when they end. Load-bearing
 // rather than housekeeping - every downgrade is deferred, so without this they'd never take effect.
 builder.Services.AddHostedService<SubscriptionScheduleService>();
@@ -466,6 +471,8 @@ builder.Services.AddAuthorization(options =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageBillingPermission));
     options.AddPolicy("ManageOrganizations", policy =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageOrganizationsPermission));
+    options.AddPolicy("ManageDiscounts", policy =>
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageDiscountsPermission));
 });
 
 // ============================================

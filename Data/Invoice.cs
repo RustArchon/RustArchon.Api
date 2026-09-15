@@ -77,7 +77,26 @@ public class Invoice : Entity
     [Column(TypeName = "numeric(18,2)")]
     public decimal TaxTotal { get; set; }
 
-    /// <summary><see cref="Subtotal"/> plus <see cref="TaxTotal"/> - what is owed.</summary>
+    /// <summary>
+    /// How much a <see cref="DiscountRedemption"/> took off this invoice - zero for the overwhelming
+    /// majority that have none. Applied to <see cref="Subtotal"/> <em>before</em> <see cref="TaxTotal"/>
+    /// is calculated (see <c>InvoiceService.IssueForPeriodAsync</c>): tax is owed on what a customer
+    /// actually pays, never on the pre-discount list price.
+    /// </summary>
+    [Column(TypeName = "numeric(18,2)")]
+    public decimal DiscountTotal { get; set; }
+
+    /// <summary>
+    /// The code that produced <see cref="DiscountTotal"/>, snapshotted as plain text rather than a
+    /// foreign key - a <see cref="Discount"/> row can be deactivated (or, in principle, deleted) long
+    /// after an invoice that used it is history, and the invoice should keep saying what it always said
+    /// regardless. The live redemption record with its own id lives on <see cref="DiscountRedemption"/>.
+    /// </summary>
+    [MaxLength(40)]
+    public string? DiscountCode { get; set; }
+
+    /// <summary><see cref="Subtotal"/> minus <see cref="DiscountTotal"/> plus <see cref="TaxTotal"/> -
+    /// what is owed.</summary>
     [Column(TypeName = "numeric(18,2)")]
     public decimal Total { get; set; }
 

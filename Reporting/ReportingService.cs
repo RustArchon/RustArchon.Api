@@ -898,6 +898,99 @@ public class ReportingService(ApiDbContext dbContext, TimeProvider timeProvider)
     }
 
     // ---------------------------------------------------------------------------------------------
+    // Discount abuse signals
+    // ---------------------------------------------------------------------------------------------
+
+    /// <inheritdoc />
+    public async Task<ReportResult<DiscountAbuseSignalRowDto>> GetDiscountAbuseSignalsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // Two cheap, lazy-case signals - see DiscountAbuseSignalRowDto's own remarks for why this is
+        // visibility, not enforcement, and why neither check is meant to be airtight against a
+        // determined abuser. Server matching includes soft-deleted rows (IgnoreQueryFilters) on purpose:
+        // "remove the server, add it to a new org" is exactly the pattern this exists to surface.
+        var now = timeProvider.GetUtcNow();
+
+        var redemptionsByTenant = await dbContext.Set<DiscountRedemption>()
+            .Include(r => r.Discount)
+            .ToListAsync(cancellationToken);
+        var codesByTenant = redemptionsByTenant
+            .GroupBy(r => r.TenantId)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.Discount.Code).Distinct().ToList());
+
+        var rows = new List<DiscountAbuseSignalRowDto>();
+
+        // Shared server Host:Port, across every tenant that has ever registered one - soft-deleted rows
+        // included, deliberately (see this method's own remarks).
+        var serverGroups = await dbContext.Set<RustServer>()
+            .IgnoreQueryFilters()
+            .GroupBy(s => new { s.Host, s.Port })
+            .Where(g => g.Select(s => s.TenantId).Distinct().Count() > 1)
+            .Select(g => new { g.Key.Host, g.Key.Port, TenantIds = g.Select(s => s.TenantId).Distinct().ToList() })
+            .ToListAsync(cancellationToken);
+
+        foreach (var group in serverGroups.Where(g => g.TenantIds.Any(t => codesByTenant.ContainsKey(t))))
+        {
+            rows.Add(new DiscountAbuseSignalRowDto
+            {
+                SignalType = "Shared server",
+                Detail = $"{group.Host}:{group.Port}",
+                Tenants = await TenantsForAsync(group.TenantIds, codesByTenant, cancellationToken)
+            });
+        }
+
+        // Shared contact email, across every tenant with one on file.
+        var emailGroups = await dbContext.Set<Tenant>()
+            .Where(t => t.ContactEmail != null && t.ContactEmail != "")
+            .GroupBy(t => t.ContactEmail!.ToLower())
+            .Where(g => g.Select(t => t.Id).Distinct().Count() > 1)
+            .Select(g => new { Email = g.Key, TenantIds = g.Select(t => t.Id).ToList() })
+            .ToListAsync(cancellationToken);
+
+        foreach (var group in emailGroups.Where(g => g.TenantIds.Any(t => codesByTenant.ContainsKey(t))))
+        {
+            rows.Add(new DiscountAbuseSignalRowDto
+            {
+                SignalType = "Shared contact email",
+                Detail = group.Email,
+                Tenants = await TenantsForAsync(group.TenantIds, codesByTenant, cancellationToken)
+            });
+        }
+
+        var truncated = Trim(rows);
+
+        var summary = new List<ReportSummaryValueDto>
+        {
+            Count("Signals", rows.Count, "group", "groups"),
+            new()
+            {
+                Label = "Organizations flagged",
+                Value = rows.SelectMany(r => r.Tenants).Select(t => t.TenantId).Distinct().Count().ToString("N0", Money),
+                Detail = "review manually - see this report's own description"
+            }
+        };
+
+        return Result(rows, summary, now, truncated);
+    }
+
+    private async Task<List<DiscountAbuseTenantDto>> TenantsForAsync(
+        List<Guid> tenantIds, Dictionary<Guid, List<string>> codesByTenant, CancellationToken cancellationToken)
+    {
+        var tenants = await dbContext.Set<Tenant>()
+            .AcrossAllTenants()
+            .Where(t => tenantIds.Contains(t.Id))
+            .ToListAsync(cancellationToken);
+
+        return tenants.Select(t => new DiscountAbuseTenantDto
+        {
+            TenantId = t.Id,
+            OrganizationName = t.Name,
+            IsActive = t.IsActive,
+            RedeemedDiscountCodes = codesByTenant.GetValueOrDefault(t.Id, [])
+        }).ToList();
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // Filter options
     // ---------------------------------------------------------------------------------------------
 

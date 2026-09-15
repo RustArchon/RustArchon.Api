@@ -47,6 +47,7 @@ public class SubscriptionController(
     ISubscriptionService subscriptionService,
     IStripeCheckoutService checkoutService,
     IOptions<StripeOptions> stripeOptions,
+    IDiscountService discountService,
     ITenantContext tenantContext) : ControllerBase
 {
     /// <summary>The caller's current subscription, including any change already scheduled.</summary>
@@ -161,6 +162,26 @@ public class SubscriptionController(
             tenantId, request.PlanId, request.TermMonths, request.Quantity, cancellationToken);
 
         return quote.Allowed ? Ok(quote) : BadRequest(quote.BlockedReason);
+    }
+
+    /// <summary>
+    /// Redeems a discount code against the caller's own Organization - applied to whichever invoice is
+    /// issued next (renewal or plan change), see <see cref="IDiscountService.RedeemAsync"/>. Always a
+    /// 200 carrying <see cref="DiscountRedemptionResultDto.Success"/>, never a 4xx for a code that
+    /// simply doesn't work - that's an ordinary outcome the Panel shows directly, not an error.
+    /// </summary>
+    [RequirePermission(PermissionCatalog.SubscriptionManage)]
+    [HttpPost("discounts/redeem")]
+    public async Task<ActionResult<DiscountRedemptionResultDto>> RedeemDiscount(
+        [FromBody] RedeemDiscountRequestDto request, CancellationToken cancellationToken)
+    {
+        if (await tenantContext.GetCurrentTenantIdAsync() is not { } tenantId)
+        {
+            return Forbid();
+        }
+
+        var result = await discountService.RedeemAsync(tenantId, request.Code, cancellationToken);
+        return Ok(new DiscountRedemptionResultDto { Success = result.Success, ErrorMessage = result.ErrorMessage });
     }
 
     /// <summary>

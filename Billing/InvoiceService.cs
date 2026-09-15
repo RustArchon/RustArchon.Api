@@ -91,18 +91,47 @@ public class InvoiceService(
             Lines = [line]
         };
 
+        // A pending discount redemption, if this tenant has one waiting - see DiscountService.RedeemAsync
+        // and Discount's own remarks for why redemption and application are two separate moments. Applied
+        // (and the redemption spent) before tax is calculated: a discounted sale owes tax on what the
+        // customer actually pays, never on the pre-discount list price.
+        var pendingDiscount = await dbContext.Set<DiscountRedemption>()
+            .Include(r => r.Discount)
+            .Where(r => r.TenantId == subscription.TenantId && r.Status == DiscountRedemptionStatus.Pending)
+            .OrderBy(r => r.RedeemedOn)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var taxableAmount = amount;
+
+        if (pendingDiscount is not null)
+        {
+            var discountAmount = pendingDiscount.Discount.AmountType == DiscountAmountType.PercentOff
+                ? Round(amount * pendingDiscount.Discount.AmountValue / 100m)
+                : Math.Min(pendingDiscount.Discount.AmountValue, amount);
+
+            taxableAmount = amount - discountAmount;
+            invoice.DiscountTotal = discountAmount;
+            invoice.DiscountCode = pendingDiscount.Discount.Code;
+            invoice.Total = taxableAmount;
+
+            pendingDiscount.Status = DiscountRedemptionStatus.Applied;
+            pendingDiscount.InvoiceId = invoice.Id;
+            pendingDiscount.DiscountAmount = discountAmount;
+            pendingDiscount.AppliedOn = now;
+        }
+
         // Sales tax, if this tenant has a billing address on file - see StripeTaxService's remarks for
         // why a failure here is left to propagate rather than swallowed: SubscriptionScheduleService's
         // own pass already treats "this period didn't get billed this time" as a normal, self-healing
         // state (see RenewAsync's remarks - the next hourly pass tries again), and issuing an invoice
         // with silently-wrong ($0) tax on it would be worse than a one-pass delay.
         var tax = await stripeTax.CalculateAsync(
-            subscription.TenantId, amount, currency, invoice.Id.ToString(), cancellationToken);
+            subscription.TenantId, taxableAmount, currency, invoice.Id.ToString(), cancellationToken);
 
         if (tax is not null)
         {
             invoice.TaxTotal = tax.TaxAmount;
-            invoice.Total = amount + tax.TaxAmount;
+            invoice.Total = taxableAmount + tax.TaxAmount;
             invoice.TaxTransactionId = tax.TransactionId;
             line.TaxAmount = tax.TaxAmount;
         }

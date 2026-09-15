@@ -51,6 +51,15 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<BlockedInvoiceIssuance> BlockedInvoiceIssuances { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the Discount and DiscountRedemption DbSets. Same reason as
+    /// <see cref="BlockedInvoiceIssuances"/> just above - nothing navigates to either of these from an
+    /// already-registered DbSet, so both need an explicit property to be discoverable at all.
+    /// </summary>
+    public DbSet<Discount> Discounts { get; set; } = null!;
+
+    public DbSet<DiscountRedemption> DiscountRedemptions { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the PlatformSetting DbSet.
     /// </summary>
     public DbSet<PlatformSetting> PlatformSettings { get; set; } = null!;
