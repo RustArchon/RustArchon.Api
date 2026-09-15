@@ -307,6 +307,22 @@ public class PaymentService(
             await stripeRefund.RefundAsync(payment.ProviderPaymentId, requestedAmount, cancellationToken);
         }
 
+        await ApplyReversalAsync(payment, live, invoices, requestedAmount, status, cancellationToken);
+        return true;
+    }
+
+    /// <summary>
+    /// The bookkeeping shared by a refund/dispute reversal <see cref="ReversePaymentAsync"/> initiates and
+    /// a chargeback <see cref="RecordDisputeAsync"/> is told about after the fact: unwind allocations
+    /// oldest-first, reopen whatever invoices they touched, and reverse each invoice's Stripe Tax
+    /// transaction by the matching share. Never calls Stripe's Refund API itself - that only ever
+    /// belongs before this, in <see cref="ReversePaymentAsync"/>, and never happens at all for a
+    /// chargeback (Stripe already took the money; there is nothing left to refund).
+    /// </summary>
+    private async Task ApplyReversalAsync(
+        Payment payment, IReadOnlyList<PaymentAllocation> live, IReadOnlyDictionary<Guid, Invoice> invoices,
+        decimal requestedAmount, PaymentStatus status, CancellationToken cancellationToken)
+    {
         var now = timeProvider.GetUtcNow();
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
@@ -367,9 +383,81 @@ public class PaymentService(
 
         logger.LogInformation(
             "Payment {PaymentId}: reversed {Amount} across {Count} allocation(s){Fully}.",
-            paymentId, requestedAmount, touched, fullyReversed ? $" (now fully {status})" : " (partial)");
+            payment.Id, requestedAmount, touched, fullyReversed ? $" (now fully {status})" : " (partial)");
+    }
 
-        return true;
+    /// <inheritdoc />
+    /// <remarks>
+    /// <strong>The money has already moved by the time this is ever called.</strong> Unlike
+    /// <see cref="ReversePaymentAsync"/>, there is no Stripe API call here at all - a chargeback means the
+    /// card network already pulled the funds out of the Stripe balance before this webhook even arrives,
+    /// so the books simply have to catch up to what already happened, using the same
+    /// <see cref="ApplyReversalAsync"/> bookkeeping a refund uses.
+    /// </remarks>
+    public async Task<Payment?> RecordDisputeAsync(
+        string providerPaymentId, string disputeId, string? reason, DateTimeOffset? dueBy,
+        CancellationToken cancellationToken = default)
+    {
+        var payment = await dbContext.Set<Payment>()
+            .Include(p => p.Allocations)
+            .FirstOrDefaultAsync(p => p.ProviderPaymentId == providerPaymentId, cancellationToken);
+
+        if (payment is null)
+        {
+            logger.LogWarning(
+                "A Stripe dispute named PaymentIntent {ProviderPaymentId}, which matches no recorded payment - not recorded.",
+                providerPaymentId);
+            return null;
+        }
+
+        if (payment.DisputeId == disputeId)
+        {
+            logger.LogInformation(
+                "Dispute {DisputeId} for payment {PaymentId} already recorded; skipping.", disputeId, payment.Id);
+            return payment;
+        }
+
+        payment.DisputeId = disputeId;
+        payment.DisputeReason = reason;
+        payment.DisputeDueBy = dueBy;
+
+        if (payment.Status == PaymentStatus.Succeeded)
+        {
+            var live = payment.Allocations
+                .Where(a => a.ReversedAmount < a.Amount)
+                .OrderBy(a => a.AllocatedOn)
+                .ToList();
+            var totalLive = live.Sum(a => a.Amount - a.ReversedAmount);
+
+            if (totalLive > 0m)
+            {
+                var invoiceIds = live.Select(a => a.InvoiceId).Distinct().ToList();
+                var invoices = await dbContext.Set<Invoice>()
+                    .Where(i => invoiceIds.Contains(i.Id))
+                    .ToDictionaryAsync(i => i.Id, cancellationToken);
+
+                await ApplyReversalAsync(payment, live, invoices, totalLive, PaymentStatus.Disputed, cancellationToken);
+            }
+            else
+            {
+                // Nothing left live to reverse (already fully refunded some other way) - still a
+                // dispute worth recording, just with no bookkeeping left for it to do.
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            // Already Refunded/Disputed/Failed by the time this arrived (an admin's own manual action
+            // beat the webhook here, or this is a second dispute against an already-disputed payment) -
+            // nothing to reverse again, just persist the dispute's own metadata.
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        logger.LogWarning(
+            "Payment {PaymentId} disputed via Stripe chargeback {DisputeId}: {Reason}, evidence due {DueBy}.",
+            payment.Id, disputeId, reason, dueBy);
+
+        return payment;
     }
 
     /// <inheritdoc />
@@ -561,7 +649,9 @@ public class PaymentService(
                     Method = a.Payment.Method,
                     Reference = a.Payment.Reference,
                     ReversedOn = a.ReversedOn,
-                    ReversedAmount = a.ReversedAmount
+                    ReversedAmount = a.ReversedAmount,
+                    Status = a.Payment.Status,
+                    DisputeId = a.Payment.DisputeId
                 })
                 .Concat(credits
                     .Where(c => c.AppliedToInvoiceId == i.Id)

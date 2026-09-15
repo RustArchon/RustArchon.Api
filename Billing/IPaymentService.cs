@@ -102,6 +102,25 @@ public interface IPaymentService
     Task<bool> ReversePaymentAsync(
         Guid paymentId, PaymentStatus status, decimal? amount = null, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Records a Stripe chargeback against a payment - called the moment a <c>charge.dispute.created</c>
+    /// webhook is verified, before any human has looked at it.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="ReversePaymentAsync"/>, this never calls Stripe's own API: a chargeback means the
+    /// card network has already pulled the money out of the Stripe balance by the time this webhook
+    /// arrives, so there is nothing left to refund - only the books to reopen, using the same reversal
+    /// bookkeeping a refund uses (see <c>PaymentService.ApplyReversalAsync</c>). Idempotent by
+    /// <paramref name="disputeId"/>, since Stripe's webhook delivery is at-least-once.
+    /// </remarks>
+    /// <param name="providerPaymentId">The disputed charge's PaymentIntent id - how the dispute is
+    /// matched back to a <see cref="Payment"/> row.</param>
+    /// <returns>The now-disputed payment, or <c>null</c> if no payment matches
+    /// <paramref name="providerPaymentId"/>.</returns>
+    Task<Payment?> RecordDisputeAsync(
+        string providerPaymentId, string disputeId, string? reason, DateTimeOffset? dueBy,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Grants value back against an invoice without money moving.</summary>
     Task<CreditNote?> IssueCreditNoteAsync(
         Guid invoiceId, decimal amount, string reason, CancellationToken cancellationToken = default);

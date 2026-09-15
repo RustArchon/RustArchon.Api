@@ -283,6 +283,22 @@ public class InternalController : ControllerBase
     }
 
     /// <summary>
+    /// Records a Stripe chargeback - called by RustArchon.Panel's own public Stripe webhook route on a
+    /// verified <c>charge.dispute.created</c> event. See
+    /// <see cref="IPaymentService.RecordDisputeAsync"/>'s own remarks for why this never touches Stripe's
+    /// API itself.
+    /// </summary>
+    [HttpPost("stripe/disputes")]
+    public async Task<IActionResult> RecordStripeDispute(
+        [FromBody] RecordStripeDisputeRequestDto request, CancellationToken cancellationToken)
+    {
+        await _paymentService.RecordDisputeAsync(
+            request.ProviderPaymentId, request.DisputeId, request.Reason, request.DueBy, cancellationToken);
+
+        return Accepted();
+    }
+
+    /// <summary>
     /// One file from a theme's package, by the same relative path it was uploaded under (e.g.
     /// <c>theme.css</c>, <c>images/hero.png</c>) - called by RustArchon.Panel's own public
     /// <c>/theme-assets/...</c> route, the seam a browser's anonymous, same-origin

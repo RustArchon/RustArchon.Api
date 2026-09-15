@@ -72,6 +72,28 @@ public class Payment : Entity
     [MaxLength(255)]
     public string? ProviderEventId { get; set; }
 
+    /// <summary>Stripe's own id for the chargeback against this payment, set the moment a
+    /// <c>charge.dispute.created</c> webhook is recorded - see <c>PaymentService.RecordDisputeAsync</c>.</summary>
+    [MaxLength(255)]
+    public string? DisputeId { get; set; }
+
+    /// <summary>Stripe's own reason code for the dispute (e.g. <c>fraudulent</c>, <c>product_not_received</c>).</summary>
+    [MaxLength(100)]
+    public string? DisputeReason { get; set; }
+
+    /// <summary>Stripe's own deadline for submitting evidence - the countdown the chargeback packet
+    /// page shows.</summary>
+    public DateTimeOffset? DisputeDueBy { get; set; }
+
+    /// <summary>
+    /// When a site admin submitted evidence to Stripe for this dispute - null until they do. Evidence
+    /// can technically be updated again before <see cref="DisputeDueBy"/>, but this is deliberately not
+    /// cleared on a later submission (it always reflects the <em>first</em> submission) - the chargeback
+    /// packet page's "already submitted" warning exists specifically to make a second submission a
+    /// deliberate choice, not something that looks unsent again.
+    /// </summary>
+    public DateTimeOffset? DisputeEvidenceSubmittedOn { get; set; }
+
     /// <summary>Optional note for a manually-recorded payment - a cheque number, a bank reference.</summary>
     [MaxLength(500)]
     public string? Reference { get; set; }

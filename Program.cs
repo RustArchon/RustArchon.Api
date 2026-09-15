@@ -279,6 +279,12 @@ builder.Services.AddScoped<IStripeTaxService, StripeTaxService>();
 // codebase currently collects through).
 builder.Services.AddScoped<IStripeRefundService, StripeRefundService>();
 
+// Submitting chargeback evidence to Stripe, and assembling it in the first place from what this
+// codebase already records (invoices, server activity, communication history) - see
+// ChargebackEvidenceService's own remarks.
+builder.Services.AddScoped<IStripeDisputeService, StripeDisputeService>();
+builder.Services.AddScoped<IChargebackEvidenceService, ChargebackEvidenceService>();
+
 // Applies scheduled (deferred) plan changes and rolls billing periods over when they end. Load-bearing
 // rather than housekeeping - every downgrade is deferred, so without this they'd never take effect.
 builder.Services.AddHostedService<SubscriptionScheduleService>();
