@@ -45,6 +45,7 @@ public class InternalController : ControllerBase
     private readonly ApiDbContext _dbContext;
     private readonly Infrastructure.ObjectStorage.IObjectStorage _objectStorage;
     private readonly IPaymentService _paymentService;
+    private readonly IStripeCredentialProvider _stripeCredentials;
 
     public InternalController(
         IPublishEndpoint publishEndpoint,
@@ -57,7 +58,8 @@ public class InternalController : ControllerBase
         IOrganizationProvisioningService provisioning,
         ApiDbContext dbContext,
         Infrastructure.ObjectStorage.IObjectStorage objectStorage,
-        IPaymentService paymentService)
+        IPaymentService paymentService,
+        IStripeCredentialProvider stripeCredentials)
     {
         _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
         _rustServerRepository = rustServerRepository ?? throw new ArgumentNullException(nameof(rustServerRepository));
@@ -70,6 +72,7 @@ public class InternalController : ControllerBase
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
         _objectStorage = objectStorage ?? throw new ArgumentNullException(nameof(objectStorage));
         _paymentService = paymentService ?? throw new ArgumentNullException(nameof(paymentService));
+        _stripeCredentials = stripeCredentials ?? throw new ArgumentNullException(nameof(stripeCredentials));
     }
 
     /// <summary>
@@ -194,6 +197,17 @@ public class InternalController : ControllerBase
             server.AssignedWorkerId,
             server.LastHeartbeatUtc);
     }
+
+    /// <summary>
+    /// This deployment's Stripe webhook signing secret, decrypted - called by RustArchon.Panel's own
+    /// public webhook route on every inbound Stripe event, to verify the payload before trusting
+    /// anything in it. Same "not cached anywhere" reasoning as <see cref="GetEmailSettings"/>: a Stripe
+    /// webhook firing is rare enough that a Postgres round trip per delivery is not a hot path worth
+    /// protecting.
+    /// </summary>
+    [HttpGet("stripe/webhook-secret")]
+    public async Task<ActionResult<string>> GetStripeWebhookSecret() =>
+        Ok(await _stripeCredentials.GetWebhookSecretAsync());
 
     /// <summary>
     /// The platform's current email delivery configuration, secrets decrypted - called by

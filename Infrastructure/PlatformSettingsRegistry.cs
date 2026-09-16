@@ -44,6 +44,7 @@ public static class PlatformSettingsRegistry
         public const string General = "General";
         public const string Registration = "Registration";
         public const string Billing = "Billing";
+        public const string Payments = "Payments";
         public const string Email = "Email";
     }
 
@@ -87,6 +88,28 @@ public static class PlatformSettingsRegistry
 
     /// <summary>See <see cref="DefaultSiteName"/>'s remarks - the same reasoning, for <see cref="SiteUrl"/>.</summary>
     public const string DefaultSiteUrl = "https://www.rustarchon.com";
+
+    /// <summary>
+    /// This deployment's own Panel base URL - where <c>StripeCheckoutService</c> sends the browser back
+    /// to once a Checkout session completes or is abandoned. Distinct from <see cref="SiteUrl"/>: that
+    /// one is the public marketing address worth putting in front of a reader (and available to every
+    /// email as a placeholder); this is purely infrastructure - which running instance of the Panel a
+    /// server-side redirect needs to build a working URL against. Also distinct from
+    /// <c>CorsSettings:BlazorServerUrl</c>, the Api's own CORS allow-list entry - that one has to be
+    /// synchronous, read-once ASP.NET Core middleware configuration, evaluated before the app (and so
+    /// before this table) is even accepting requests, so it stays an environment value; this setting is
+    /// everything downstream of startup that needs the same URL, seeded from that same env value the one
+    /// time this row is created (see <see cref="InvitationCodesEnabled"/>'s own <c>legacyEnvDefault</c>
+    /// for the identical one-time-seed-then-ignore-the-env-var pattern) so an existing deployment's
+    /// current behavior doesn't change the moment this ships.
+    /// </summary>
+    public const string PanelBaseUrl = "PanelBaseUrl";
+
+    /// <summary>
+    /// <see cref="PanelBaseUrl"/>'s fallback if the row is ever missing or unreadable - the same
+    /// development-mode address <c>CorsSettings:BlazorServerUrl</c> itself falls back to.
+    /// </summary>
+    public const string DefaultPanelBaseUrl = "https://localhost:7199";
 
     /// <summary>
     /// Which setting keys, when changed, need every already-open RustArchon.Panel circuit told that its
@@ -162,6 +185,25 @@ public static class PlatformSettingsRegistry
     /// holds the role or whether they've ever logged in.
     /// </summary>
     public const string ComplianceNotificationEmail = "ComplianceNotificationEmail";
+
+    /// <summary>
+    /// The restricted Stripe API key this deployment collects payments through - see
+    /// <c>StripeCredentialProvider</c>, the only place this is read (directly from Postgres and
+    /// decrypted on the spot, never through <see cref="IPlatformSettingsCache"/> - see that class'
+    /// remarks for why a Secret setting stays out of Valkey). Scoped to <c>Checkout Sessions: Write</c>
+    /// and nothing else - see <c>StripeCheckoutService</c>'s remarks for why no broader scope is ever
+    /// needed. Test-mode (<c>rk_test_...</c>) or live-mode (<c>rk_live_...</c>) depending on the
+    /// deployment. Encrypted at rest - see <see cref="PlatformSettingValueType.Secret"/>.
+    /// </summary>
+    public const string StripeSecretKey = "StripeSecretKey";
+
+    /// <summary>
+    /// The signing secret Stripe issues for this deployment's webhook endpoint - what would verify an
+    /// inbound payload genuinely came from Stripe before trusting anything in it. Not an API key; carries
+    /// no ability to call Stripe's API at all. Encrypted at rest - see
+    /// <see cref="PlatformSettingValueType.Secret"/>.
+    /// </summary>
+    public const string StripeWebhookSecret = "StripeWebhookSecret";
 
     /// <summary>
     /// Which email provider is in effect - a <see cref="PlatformSettingValueType.Choice"/> among
@@ -245,6 +287,24 @@ public static class PlatformSettingsRegistry
             defaultValue: DefaultSiteUrl,
             logger: logger);
 
+        // See PanelBaseUrl's own remarks - this deployment's existing CorsSettings:BlazorServerUrl value
+        // becomes this row's starting point the one time it's created, the same one-time-seed pattern
+        // legacyEnvDefault below uses for RUSTARCHON_INVITATION_CODES_ENABLED.
+        var panelBaseUrlEnvDefault =
+            configuration["CorsSettings:BlazorServerUrl"] ?? DefaultPanelBaseUrl;
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PanelBaseUrl,
+            category: Categories.General,
+            order: 30,
+            displayName: "Panel base URL",
+            description: "This deployment's own Panel address - where Stripe Checkout sends the " +
+                "browser back to once payment completes or is abandoned.",
+            valueType: PlatformSettingValueType.String,
+            defaultValue: panelBaseUrlEnvDefault,
+            logger: logger);
+
         await EnsureSettingAsync(
             dbContext,
             key: InvitationCodesEnabled,
@@ -315,6 +375,30 @@ public static class PlatformSettingsRegistry
                 "of a Stripe tax registration - see the Tax Registrations dashboard at " +
                 "dashboard.stripe.com/tax/locations. Leave blank to skip the digest entirely.",
             valueType: PlatformSettingValueType.String,
+            defaultValue: string.Empty,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: StripeSecretKey,
+            category: Categories.Payments,
+            order: 10,
+            displayName: "Stripe secret key",
+            description: "The restricted API key (Checkout Sessions: Write) Stripe checkout runs " +
+                "under - rk_test_... or rk_live_... depending on the deployment. Encrypted at rest.",
+            valueType: PlatformSettingValueType.Secret,
+            defaultValue: string.Empty,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: StripeWebhookSecret,
+            category: Categories.Payments,
+            order: 20,
+            displayName: "Stripe webhook signing secret",
+            description: "The signing secret Stripe issues for this deployment's webhook endpoint, " +
+                "used to verify an inbound payload genuinely came from Stripe. Encrypted at rest.",
+            valueType: PlatformSettingValueType.Secret,
             defaultValue: string.Empty,
             logger: logger);
 

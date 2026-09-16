@@ -4,7 +4,6 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Stripe;
 
 namespace RustArchon.Api.Billing;
@@ -39,14 +38,14 @@ public interface IStripeRefundService
 /// method is added, this is the class that needs the async webhook-confirmed path, not
 /// <c>PaymentService</c>.
 /// </remarks>
-public class StripeRefundService(IOptions<StripeOptions> options, ILogger<StripeRefundService> logger)
+public class StripeRefundService(IStripeCredentialProvider credentials, ILogger<StripeRefundService> logger)
     : IStripeRefundService
 {
     /// <inheritdoc />
     public async Task<string> RefundAsync(
         string paymentIntentId, decimal amount, CancellationToken cancellationToken = default)
     {
-        var requestOptions = new RequestOptions { ApiKey = options.Value.SecretKey };
+        var requestOptions = new RequestOptions { ApiKey = await credentials.GetSecretKeyAsync() };
 
         var refundOptions = new RefundCreateOptions
         {

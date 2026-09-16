@@ -36,4 +36,6 @@ public static class ApiKeyProtectorPurposes
     public const string GeolocationApiKey = "RustArchon.RustServer.GeolocationApiKey.v1";
     public const string EmailSmtpPassword = "RustArchon.PlatformSetting.EmailSmtpPassword.v1";
     public const string EmailApiKey = "RustArchon.PlatformSetting.EmailApiKey.v1";
+    public const string StripeSecretKey = "RustArchon.PlatformSetting.StripeSecretKey.v1";
+    public const string StripeWebhookSecret = "RustArchon.PlatformSetting.StripeWebhookSecret.v1";
 }

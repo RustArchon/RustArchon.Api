@@ -259,14 +259,12 @@ builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 
 // Stripe Checkout (payment mode only - see StripeCheckoutService's remarks for why never Stripe's own
-// Subscriptions/Billing product). No :?required guard - see StripeOptions' own remarks: nothing at
-// startup calls Stripe, so a deployment that hasn't configured this yet still starts fine.
-builder.Services.Configure<StripeOptions>(options =>
-{
-    options.SecretKey = builder.Configuration["STRIPE_SECRET_KEY"] ?? string.Empty;
-    options.WebhookSecret = builder.Configuration["STRIPE_WEBHOOK_SECRET"] ?? string.Empty;
-    options.PanelBaseUrl = builder.Configuration["CorsSettings:BlazorServerUrl"] ?? "https://localhost:7199";
-});
+// Subscriptions/Billing product). The secret key/webhook secret/Panel base URL all live in Platform
+// Settings now (StripeSecretKey/StripeWebhookSecret/PanelBaseUrl - see StripeCredentialProvider and
+// SubscriptionController), not environment variables - one place configuration lives, not several. No
+// startup-time read here at all: nothing calls Stripe at Api startup, so a deployment that hasn't
+// configured this yet still starts fine, exactly as before.
+builder.Services.AddScoped<IStripeCredentialProvider, StripeCredentialProvider>();
 builder.Services.AddScoped<IStripeCheckoutService, StripeCheckoutService>();
 
 // Sales tax via Stripe Tax - see StripeTaxService's own remarks (one tax code for everything RustArchon

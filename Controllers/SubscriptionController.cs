@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using JumpStart.Repositories;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
 using RustArchon.Api.Billing;
 using JumpStart.Authorization;
 using RustArchon.Api.Infrastructure;
@@ -46,7 +45,7 @@ namespace RustArchon.Api.Controllers;
 public class SubscriptionController(
     ISubscriptionService subscriptionService,
     IStripeCheckoutService checkoutService,
-    IOptions<StripeOptions> stripeOptions,
+    IPlatformSettingsCache settingsCache,
     IDiscountService discountService,
     ITenantContext tenantContext) : ControllerBase
 {
@@ -95,7 +94,10 @@ public class SubscriptionController(
             return Forbid();
         }
 
-        var panelBaseUrl = stripeOptions.Value.PanelBaseUrl.TrimEnd('/');
+        var configuredPanelBaseUrl = await settingsCache.GetStringAsync(PlatformSettingsRegistry.PanelBaseUrl);
+        var panelBaseUrl = (configuredPanelBaseUrl is { Length: > 0 }
+            ? configuredPanelBaseUrl
+            : PlatformSettingsRegistry.DefaultPanelBaseUrl).TrimEnd('/');
         var url = await checkoutService.CreateCheckoutSessionAsync(
             tenantId, invoiceId,
             successUrl: $"{panelBaseUrl}/Account/BillingHistory?paid=1",

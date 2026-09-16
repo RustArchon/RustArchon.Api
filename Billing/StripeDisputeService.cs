@@ -3,7 +3,6 @@
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Stripe;
 
 namespace RustArchon.Api.Billing;
@@ -41,14 +40,14 @@ public interface IStripeDisputeService
 }
 
 /// <inheritdoc cref="IStripeDisputeService" />
-public class StripeDisputeService(IOptions<StripeOptions> options, ILogger<StripeDisputeService> logger)
+public class StripeDisputeService(IStripeCredentialProvider credentials, ILogger<StripeDisputeService> logger)
     : IStripeDisputeService
 {
     /// <inheritdoc />
     public async Task SubmitEvidenceAsync(
         string disputeId, DisputeEvidenceInput evidence, CancellationToken cancellationToken = default)
     {
-        var requestOptions = new RequestOptions { ApiKey = options.Value.SecretKey };
+        var requestOptions = new RequestOptions { ApiKey = await credentials.GetSecretKeyAsync() };
 
         var updateOptions = new DisputeUpdateOptions
         {

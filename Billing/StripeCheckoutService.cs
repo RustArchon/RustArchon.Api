@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using RustArchon.Api.Data;
 using RustArchon.Shared.DTOs;
 using Stripe;
@@ -57,7 +56,7 @@ public interface IStripeCheckoutService
 /// </para>
 /// </remarks>
 public class StripeCheckoutService(
-    ApiDbContext dbContext, IOptions<StripeOptions> options, ILogger<StripeCheckoutService> logger)
+    ApiDbContext dbContext, IStripeCredentialProvider credentials, ILogger<StripeCheckoutService> logger)
     : IStripeCheckoutService
 {
     /// <inheritdoc />
@@ -76,7 +75,7 @@ public class StripeCheckoutService(
             return null;
         }
 
-        var requestOptions = new RequestOptions { ApiKey = options.Value.SecretKey };
+        var requestOptions = new RequestOptions { ApiKey = await credentials.GetSecretKeyAsync() };
 
         var sessionOptions = new SessionCreateOptions
         {

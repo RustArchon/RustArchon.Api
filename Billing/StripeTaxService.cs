@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using RustArchon.Api.Data;
 using Stripe;
 
@@ -111,7 +110,7 @@ public interface IStripeTaxService
 /// </para>
 /// </remarks>
 public class StripeTaxService(
-    ApiDbContext dbContext, IOptions<StripeOptions> options, ILogger<StripeTaxService> logger)
+    ApiDbContext dbContext, IStripeCredentialProvider credentials, ILogger<StripeTaxService> logger)
     : IStripeTaxService
 {
     /// <summary>
@@ -133,7 +132,7 @@ public class StripeTaxService(
             return null;
         }
 
-        var requestOptions = new RequestOptions { ApiKey = options.Value.SecretKey };
+        var requestOptions = new RequestOptions { ApiKey = await credentials.GetSecretKeyAsync() };
 
         var calculationOptions = new Stripe.Tax.CalculationCreateOptions
         {
@@ -204,7 +203,7 @@ public class StripeTaxService(
         string taxTransactionId, decimal amount, string referenceId,
         CancellationToken cancellationToken = default)
     {
-        var requestOptions = new RequestOptions { ApiKey = options.Value.SecretKey };
+        var requestOptions = new RequestOptions { ApiKey = await credentials.GetSecretKeyAsync() };
 
         var reversalOptions = new Stripe.Tax.TransactionCreateReversalOptions
         {
