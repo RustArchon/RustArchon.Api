@@ -57,6 +57,43 @@ public class Payment : Entity
     [MaxLength(255)]
     public string? ProviderPaymentId { get; set; }
 
+    /// <summary>
+    /// The payment provider's own id for the specific event that produced this row (a Stripe
+    /// <c>evt_...</c> id), set only for a <see cref="PaymentStatus.Failed"/> row recorded from a webhook.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="ProviderPaymentId"/> on purpose: a Stripe PaymentIntent can fail more
+    /// than once (a customer retries with a different card on the same Checkout Session), so deduping a
+    /// failure by <see cref="ProviderPaymentId"/> the way <c>PaymentService.RecordPaymentAsync</c> dedupes
+    /// a success would silently drop every failure after the first genuinely distinct decline on the same
+    /// PaymentIntent. A webhook's own event id is unique per occurrence, including redelivery of the
+    /// identical event, which is exactly the idempotency key a failure needs.
+    /// </remarks>
+    [MaxLength(255)]
+    public string? ProviderEventId { get; set; }
+
+    /// <summary>Stripe's own id for the chargeback against this payment, set the moment a
+    /// <c>charge.dispute.created</c> webhook is recorded - see <c>PaymentService.RecordDisputeAsync</c>.</summary>
+    [MaxLength(255)]
+    public string? DisputeId { get; set; }
+
+    /// <summary>Stripe's own reason code for the dispute (e.g. <c>fraudulent</c>, <c>product_not_received</c>).</summary>
+    [MaxLength(100)]
+    public string? DisputeReason { get; set; }
+
+    /// <summary>Stripe's own deadline for submitting evidence - the countdown the chargeback packet
+    /// page shows.</summary>
+    public DateTimeOffset? DisputeDueBy { get; set; }
+
+    /// <summary>
+    /// When a site admin submitted evidence to Stripe for this dispute - null until they do. Evidence
+    /// can technically be updated again before <see cref="DisputeDueBy"/>, but this is deliberately not
+    /// cleared on a later submission (it always reflects the <em>first</em> submission) - the chargeback
+    /// packet page's "already submitted" warning exists specifically to make a second submission a
+    /// deliberate choice, not something that looks unsent again.
+    /// </summary>
+    public DateTimeOffset? DisputeEvidenceSubmittedOn { get; set; }
+
     /// <summary>Optional note for a manually-recorded payment - a cheque number, a bank reference.</summary>
     [MaxLength(500)]
     public string? Reference { get; set; }
@@ -88,14 +125,22 @@ public class PaymentAllocation : Entity
     public DateTimeOffset AllocatedOn { get; set; }
 
     /// <summary>
-    /// Set when this allocation is undone by a refund or a chargeback, rather than the row being deleted.
+    /// Set once this allocation has been reversed <em>in full</em> - null while it hasn't been touched
+    /// at all, and still null while only part of it has (see <see cref="ReversedAmount"/>). Deleting the
+    /// row instead would make an invoice reopen with no record of why, and "this was paid and then
+    /// charged back" is precisely what someone looking at an unexpectedly-open invoice needs to be told.
     /// </summary>
-    /// <remarks>
-    /// Reversal is a fact worth keeping. Deleting the row would make an invoice reopen with no record of
-    /// why, and "this was paid and then charged back" is precisely what someone looking at an
-    /// unexpectedly-open invoice needs to be told.
-    /// </remarks>
     public DateTimeOffset? ReversedOn { get; set; }
+
+    /// <summary>
+    /// How much of <see cref="Amount"/> has been given back so far, via one or more partial refunds -
+    /// zero if none has. An allocation is still "live" (available to reverse further) whenever this is
+    /// less than <see cref="Amount"/>, regardless of whether <see cref="ReversedOn"/> is set; the two
+    /// only agree once this reaches <see cref="Amount"/> exactly, which is what actually sets
+    /// <see cref="ReversedOn"/>.
+    /// </summary>
+    [Column(TypeName = "numeric(18,2)")]
+    public decimal ReversedAmount { get; set; }
 }
 
 /// <summary>

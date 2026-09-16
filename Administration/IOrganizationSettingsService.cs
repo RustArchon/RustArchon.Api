@@ -37,7 +37,16 @@ public interface IOrganizationSettingsService
     /// one, and <c>OrganizationLifecycleService.NotifyAsync</c> already treats a missing address as a
     /// silent no-op rather than an error.
     /// </param>
+    /// <param name="billingCountry">
+    /// A blank value clears the whole billing address (every field below, not just this one) - the same
+    /// "blank clears it" rule <paramref name="contactEmail"/> already follows. Anything else requires a
+    /// non-blank <see cref="Data.TenantBillingAddress.Country"/> to be stored at all - see that class's
+    /// remarks on why country is the one field this concern actually depends on.
+    /// </param>
     /// <returns><c>false</c> when the tenant cannot be found.</returns>
     Task<bool> UpdateAsync(
-        Guid tenantId, string name, string? contactEmail, CancellationToken cancellationToken = default);
+        Guid tenantId, string name, string? contactEmail,
+        string? billingLine1, string? billingLine2, string? billingCity, string? billingState,
+        string? billingPostalCode, string? billingCountry,
+        CancellationToken cancellationToken = default);
 }

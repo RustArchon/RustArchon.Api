@@ -102,6 +102,7 @@ public static class PermissionCatalog
     public const string PlatformViewReports = "Platform.ViewReports";
     public const string PlatformManageBilling = "Platform.ManageBilling";
     public const string PlatformManageOrganizations = "Platform.ManageOrganizations";
+    public const string PlatformManageDiscounts = "Platform.ManageDiscounts";
 
     /// <summary>
     /// Everything an Organization's built-in Owner role holds - the full tenant-scoped set.
@@ -117,7 +118,7 @@ public static class PermissionCatalog
     public static readonly string[] PlatformPermissions =
     [
         PlatformManageInvitations, PlatformManageSettings, PlatformManagePlans,
-        PlatformViewReports, PlatformManageBilling, PlatformManageOrganizations
+        PlatformViewReports, PlatformManageBilling, PlatformManageOrganizations, PlatformManageDiscounts
     ];
 
     /// <summary>
@@ -160,6 +161,7 @@ public static class PermissionCatalog
         new(PlatformManagePlans, PermissionScope.Platform, "Platform"),
         new(PlatformViewReports, PermissionScope.Platform, "Platform"),
         new(PlatformManageBilling, PermissionScope.Platform, "Platform"),
-        new(PlatformManageOrganizations, PermissionScope.Platform, "Platform")
+        new(PlatformManageOrganizations, PermissionScope.Platform, "Platform"),
+        new(PlatformManageDiscounts, PermissionScope.Platform, "Platform")
     ];
 }

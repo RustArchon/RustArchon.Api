@@ -44,6 +44,7 @@ public static class PlatformSettingsRegistry
         public const string General = "General";
         public const string Registration = "Registration";
         public const string Billing = "Billing";
+        public const string Payments = "Payments";
         public const string Email = "Email";
     }
 
@@ -89,6 +90,28 @@ public static class PlatformSettingsRegistry
     public const string DefaultSiteUrl = "https://www.rustarchon.com";
 
     /// <summary>
+    /// This deployment's own Panel base URL - where <c>StripeCheckoutService</c> sends the browser back
+    /// to once a Checkout session completes or is abandoned. Distinct from <see cref="SiteUrl"/>: that
+    /// one is the public marketing address worth putting in front of a reader (and available to every
+    /// email as a placeholder); this is purely infrastructure - which running instance of the Panel a
+    /// server-side redirect needs to build a working URL against. Also distinct from
+    /// <c>CorsSettings:BlazorServerUrl</c>, the Api's own CORS allow-list entry - that one has to be
+    /// synchronous, read-once ASP.NET Core middleware configuration, evaluated before the app (and so
+    /// before this table) is even accepting requests, so it stays an environment value; this setting is
+    /// everything downstream of startup that needs the same URL, seeded from that same env value the one
+    /// time this row is created (see <see cref="InvitationCodesEnabled"/>'s own <c>legacyEnvDefault</c>
+    /// for the identical one-time-seed-then-ignore-the-env-var pattern) so an existing deployment's
+    /// current behavior doesn't change the moment this ships.
+    /// </summary>
+    public const string PanelBaseUrl = "PanelBaseUrl";
+
+    /// <summary>
+    /// <see cref="PanelBaseUrl"/>'s fallback if the row is ever missing or unreadable - the same
+    /// development-mode address <c>CorsSettings:BlazorServerUrl</c> itself falls back to.
+    /// </summary>
+    public const string DefaultPanelBaseUrl = "https://localhost:7199";
+
+    /// <summary>
     /// Which setting keys, when changed, need every already-open RustArchon.Panel circuit told that its
     /// next navigation must be a full reload - see <see cref="IAppGenerationCache"/>. A key belongs here
     /// only if it's rendered into the page chrome itself, visible on every screen regardless of which
@@ -127,6 +150,60 @@ public static class PlatformSettingsRegistry
 
     /// <summary>The value <see cref="PaymentTermsDays"/> falls back to when unset or unparseable.</summary>
     public const int DefaultPaymentTermsDays = 14;
+
+    /// <summary>
+    /// How many days before an invoice's due date <c>DunningService</c> sends the "payment due soon"
+    /// reminder - see <see cref="EmailTemplateRegistry.Codes.PaymentDueSoon"/>. A commercial decision,
+    /// same reasoning as <see cref="PaymentTermsDays"/>.
+    /// </summary>
+    public const string PaymentDueSoonReminderDays = "PaymentDueSoonReminderDays";
+
+    /// <summary>The value <see cref="PaymentDueSoonReminderDays"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultPaymentDueSoonReminderDays = 14;
+
+    /// <summary>
+    /// How many days after an invoice goes past due <c>DunningService</c> waits, with it still unpaid,
+    /// before suspending the Organization (see <c>OrganizationLifecycleService.SetStatusAsync</c>).
+    /// Measured from <c>Subscription.StatusChangedOn</c> - the moment the subscription was actually
+    /// marked <see cref="Shared.DTOs.SubscriptionStatus.PastDue"/> - not from the invoice's own due
+    /// date, so the "past due" notice's own promised countdown ("suspension in N days") is exactly this
+    /// number regardless of how promptly the sweep caught the invoice going overdue.
+    /// </summary>
+    public const string SuspensionGraceDays = "SuspensionGraceDays";
+
+    /// <summary>The value <see cref="SuspensionGraceDays"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultSuspensionGraceDays = 7;
+
+    /// <summary>
+    /// Where <c>NexusComplianceNotificationService</c> sends its daily digest of tenants whose invoices
+    /// are blocked on a missing Stripe tax registration (see <c>Data.BlockedInvoiceIssuance</c>). Empty
+    /// (the seeded default) means nobody has configured one yet - the digest is skipped entirely rather
+    /// than sent nowhere. Deliberately a plain address, not "every Site Admin" - see that service's own
+    /// remarks for why: nothing in this Api can resolve a Site Admin's user id to an email address at
+    /// all (that data lives entirely in RustArchon.Panel's own Identity store), and a single
+    /// distribution address Scott configures once is simpler anyway - it doesn't depend on who currently
+    /// holds the role or whether they've ever logged in.
+    /// </summary>
+    public const string ComplianceNotificationEmail = "ComplianceNotificationEmail";
+
+    /// <summary>
+    /// The restricted Stripe API key this deployment collects payments through - see
+    /// <c>StripeCredentialProvider</c>, the only place this is read (directly from Postgres and
+    /// decrypted on the spot, never through <see cref="IPlatformSettingsCache"/> - see that class'
+    /// remarks for why a Secret setting stays out of Valkey). Scoped to <c>Checkout Sessions: Write</c>
+    /// and nothing else - see <c>StripeCheckoutService</c>'s remarks for why no broader scope is ever
+    /// needed. Test-mode (<c>rk_test_...</c>) or live-mode (<c>rk_live_...</c>) depending on the
+    /// deployment. Encrypted at rest - see <see cref="PlatformSettingValueType.Secret"/>.
+    /// </summary>
+    public const string StripeSecretKey = "StripeSecretKey";
+
+    /// <summary>
+    /// The signing secret Stripe issues for this deployment's webhook endpoint - what would verify an
+    /// inbound payload genuinely came from Stripe before trusting anything in it. Not an API key; carries
+    /// no ability to call Stripe's API at all. Encrypted at rest - see
+    /// <see cref="PlatformSettingValueType.Secret"/>.
+    /// </summary>
+    public const string StripeWebhookSecret = "StripeWebhookSecret";
 
     /// <summary>
     /// Which email provider is in effect - a <see cref="PlatformSettingValueType.Choice"/> among
@@ -210,6 +287,24 @@ public static class PlatformSettingsRegistry
             defaultValue: DefaultSiteUrl,
             logger: logger);
 
+        // See PanelBaseUrl's own remarks - this deployment's existing CorsSettings:BlazorServerUrl value
+        // becomes this row's starting point the one time it's created, the same one-time-seed pattern
+        // legacyEnvDefault below uses for RUSTARCHON_INVITATION_CODES_ENABLED.
+        var panelBaseUrlEnvDefault =
+            configuration["CorsSettings:BlazorServerUrl"] ?? DefaultPanelBaseUrl;
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PanelBaseUrl,
+            category: Categories.General,
+            order: 30,
+            displayName: "Panel base URL",
+            description: "This deployment's own Panel address - where Stripe Checkout sends the " +
+                "browser back to once payment completes or is abandoned.",
+            valueType: PlatformSettingValueType.String,
+            defaultValue: panelBaseUrlEnvDefault,
+            logger: logger);
+
         await EnsureSettingAsync(
             dbContext,
             key: InvitationCodesEnabled,
@@ -244,6 +339,67 @@ public static class PlatformSettingsRegistry
                 "report calls overdue is measured from this.",
             valueType: PlatformSettingValueType.Integer,
             defaultValue: DefaultPaymentTermsDays.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PaymentDueSoonReminderDays,
+            category: Categories.Billing,
+            order: 20,
+            displayName: "Payment due soon reminder (days before due)",
+            description: "How many days before an invoice's due date to send a heads-up that payment " +
+                "is coming due.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultPaymentDueSoonReminderDays.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: SuspensionGraceDays,
+            category: Categories.Billing,
+            order: 30,
+            displayName: "Suspension grace period (days)",
+            description: "How many days an Organization stays past due, still unpaid, before its " +
+                "servers are suspended.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultSuspensionGraceDays.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: ComplianceNotificationEmail,
+            category: Categories.Billing,
+            order: 40,
+            displayName: "Tax compliance notification address",
+            description: "Where to send the daily digest of jurisdictions blocking an invoice for lack " +
+                "of a Stripe tax registration - see the Tax Registrations dashboard at " +
+                "dashboard.stripe.com/tax/locations. Leave blank to skip the digest entirely.",
+            valueType: PlatformSettingValueType.String,
+            defaultValue: string.Empty,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: StripeSecretKey,
+            category: Categories.Payments,
+            order: 10,
+            displayName: "Stripe secret key",
+            description: "The restricted API key (Checkout Sessions: Write) Stripe checkout runs " +
+                "under - rk_test_... or rk_live_... depending on the deployment. Encrypted at rest.",
+            valueType: PlatformSettingValueType.Secret,
+            defaultValue: string.Empty,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: StripeWebhookSecret,
+            category: Categories.Payments,
+            order: 20,
+            displayName: "Stripe webhook signing secret",
+            description: "The signing secret Stripe issues for this deployment's webhook endpoint, " +
+                "used to verify an inbound payload genuinely came from Stripe. Encrypted at rest.",
+            valueType: PlatformSettingValueType.Secret,
+            defaultValue: string.Empty,
             logger: logger);
 
         await EnsureSettingAsync(

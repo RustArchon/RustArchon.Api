@@ -76,6 +76,8 @@ public class PlatformSettingsController : ControllerBase
     {
         PlatformSettingsRegistry.EmailSmtpPassword => ApiKeyProtectorPurposes.EmailSmtpPassword,
         PlatformSettingsRegistry.EmailApiKey => ApiKeyProtectorPurposes.EmailApiKey,
+        PlatformSettingsRegistry.StripeSecretKey => ApiKeyProtectorPurposes.StripeSecretKey,
+        PlatformSettingsRegistry.StripeWebhookSecret => ApiKeyProtectorPurposes.StripeWebhookSecret,
         _ => throw new InvalidOperationException(
             $"'{key}' is declared as a Secret setting but has no IApiKeyProtector purpose registered.")
     };

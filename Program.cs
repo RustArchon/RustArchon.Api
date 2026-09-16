@@ -258,9 +258,53 @@ builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 // today - a provider adapter calls these same methods rather than inventing a second path to the tables.
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 
+// Stripe Checkout (payment mode only - see StripeCheckoutService's remarks for why never Stripe's own
+// Subscriptions/Billing product). The secret key/webhook secret/Panel base URL all live in Platform
+// Settings now (StripeSecretKey/StripeWebhookSecret/PanelBaseUrl - see StripeCredentialProvider and
+// SubscriptionController), not environment variables - one place configuration lives, not several. No
+// startup-time read here at all: nothing calls Stripe at Api startup, so a deployment that hasn't
+// configured this yet still starts fine, exactly as before.
+builder.Services.AddScoped<IStripeCredentialProvider, StripeCredentialProvider>();
+builder.Services.AddScoped<IStripeCheckoutService, StripeCheckoutService>();
+
+// Sales tax via Stripe Tax - see StripeTaxService's own remarks (one tax code for everything RustArchon
+// sells, calculation+transaction in one call, failures left to propagate). Registered before
+// IInvoiceService below since that's the one caller.
+builder.Services.AddScoped<IStripeTaxService, StripeTaxService>();
+
+// Refunding a Stripe-collected payment - see IStripeRefundService's own remarks on why this
+// deliberately assumes every refund resolves synchronously (true of every payment method this
+// codebase currently collects through).
+builder.Services.AddScoped<IStripeRefundService, StripeRefundService>();
+
+// Submitting chargeback evidence to Stripe, and assembling it in the first place from what this
+// codebase already records (invoices, server activity, communication history) - see
+// ChargebackEvidenceService's own remarks.
+builder.Services.AddScoped<IStripeDisputeService, StripeDisputeService>();
+builder.Services.AddScoped<IChargebackEvidenceService, ChargebackEvidenceService>();
+
+// The discount catalog and redemption - see DiscountService's own remarks. Read from
+// InvoiceService.IssueForPeriodAsync directly (via ApiDbContext, not this interface), which stays true
+// to "an issued invoice is immutable" without needing IDiscountService to know anything about invoicing.
+builder.Services.AddScoped<IDiscountService, DiscountService>();
+
 // Applies scheduled (deferred) plan changes and rolls billing periods over when they end. Load-bearing
 // rather than housekeeping - every downgrade is deferred, so without this they'd never take effect.
 builder.Services.AddHostedService<SubscriptionScheduleService>();
+
+// Chases unpaid invoices: due-soon reminder, past-due notice with a suspension countdown, then the
+// suspension itself if it's still unpaid - see DunningService's own remarks for why this is a separate
+// sweep from SubscriptionScheduleService above rather than a third pass bolted onto it. Depends on
+// IOrganizationLifecycleService, registered further below - fine for DI (resolved lazily, not by
+// registration order), listed here only because this is where its sibling hosted services live.
+builder.Services.AddHostedService<DunningService>();
+
+// Once a day, emails whoever is configured in ComplianceNotificationEmail a digest of jurisdictions
+// currently blocking a tenant's invoice for lack of a Stripe tax registration - see
+// BlockedInvoiceIssuance, written by SubscriptionScheduleService above whenever it catches a
+// TaxJurisdictionUnregisteredException. A no-op pass whenever that setting is blank or nothing is
+// currently blocked.
+builder.Services.AddHostedService<NexusComplianceNotificationService>();
 
 // ============================================
 // 4e. REPORTING
@@ -425,6 +469,8 @@ builder.Services.AddAuthorization(options =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageBillingPermission));
     options.AddPolicy("ManageOrganizations", policy =>
         policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageOrganizationsPermission));
+    options.AddPolicy("ManageDiscounts", policy =>
+        policy.RequireClaim("Permission", SiteAdminRoleSeeder.ManageDiscountsPermission));
 });
 
 // ============================================

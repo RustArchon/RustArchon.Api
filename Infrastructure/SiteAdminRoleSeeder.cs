@@ -69,6 +69,14 @@ public static class SiteAdminRoleSeeder
     public const string ManageOrganizationsPermission = "Platform.ManageOrganizations";
 
     /// <summary>
+    /// Managing the discount catalog and assigning a code to an Organization on its behalf. Its own
+    /// permission rather than a reuse of <see cref="ManageBillingPermission"/> or
+    /// <see cref="ManagePlansPermission"/>: setting up promotional rules is neither settling an
+    /// individual invoice nor changing what the catalog itself costs.
+    /// </summary>
+    public const string ManageDiscountsPermission = "Platform.ManageDiscounts";
+
+    /// <summary>
     /// Every permission the "Site Admin" role should hold. Adding a new platform-level capability
     /// later is adding its permission string here - never a migration.
     /// </summary>
@@ -79,7 +87,8 @@ public static class SiteAdminRoleSeeder
         ManagePlansPermission,
         ViewReportsPermission,
         ManageBillingPermission,
-        ManageOrganizationsPermission
+        ManageOrganizationsPermission,
+        ManageDiscountsPermission
     ];
 
     /// <summary>

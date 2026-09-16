@@ -98,6 +98,30 @@ public interface IReportingService
         decimal minOutstanding = 0m, bool overdueOnly = true, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Every jurisdiction currently blocking at least one tenant's invoice for lack of a Stripe tax
+    /// registration - see <c>Data.BlockedInvoiceIssuance</c>, worst (oldest) first.
+    /// </summary>
+    Task<ReportResult<BlockedInvoiceJurisdictionRowDto>> GetBlockedInvoicesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every payment attempt - successful or failed - received between <paramref name="from"/> and
+    /// <paramref name="to"/> inclusive, newest first. The processor reconciliation report (cross-check
+    /// against Stripe's own dashboard/export by <c>ProviderPaymentId</c>) and the failed-charge report
+    /// are the same underlying data, filtered by <paramref name="status"/>.
+    /// </summary>
+    Task<ReportResult<PaymentLedgerRowDto>> GetPaymentLedgerAsync(
+        DateOnly from, DateOnly to, PaymentStatus? status = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Groups of Organizations sharing a server's Host:Port or a contact email, where at least one of
+    /// them has redeemed a discount - a flag for a human to review, never an automatic conclusion. See
+    /// <c>ReportingService</c>'s own remarks.
+    /// </summary>
+    Task<ReportResult<DiscountAbuseSignalRowDto>> GetDiscountAbuseSignalsAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The plans available as a dropdown filter on the reports that take one - every plan any
     /// Organization is or has been on, plus every active plan.
     /// </summary>

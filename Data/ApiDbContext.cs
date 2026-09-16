@@ -36,6 +36,30 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<RconEvent> RconEvents { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the TenantBillingAddress DbSet. Needs an explicit property, unlike most of the
+    /// billing subsystem's own entities (<see cref="Invoice"/>, <see cref="InvoiceLine"/>, ...), which
+    /// EF Core discovers by walking navigation properties from an already-registered DbSet - nothing
+    /// navigates <em>to</em> this one, so without this property it's invisible to the model entirely.
+    /// </summary>
+    public DbSet<TenantBillingAddress> TenantBillingAddresses { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the BlockedInvoiceIssuance DbSet. Same reason as <see cref="TenantBillingAddresses"/>
+    /// just above - nothing navigates to <see cref="BlockedInvoiceIssuance"/> either, so it needs the
+    /// same explicit property to be discoverable at all.
+    /// </summary>
+    public DbSet<BlockedInvoiceIssuance> BlockedInvoiceIssuances { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the Discount and DiscountRedemption DbSets. Same reason as
+    /// <see cref="BlockedInvoiceIssuances"/> just above - nothing navigates to either of these from an
+    /// already-registered DbSet, so both need an explicit property to be discoverable at all.
+    /// </summary>
+    public DbSet<Discount> Discounts { get; set; } = null!;
+
+    public DbSet<DiscountRedemption> DiscountRedemptions { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the PlatformSetting DbSet.
     /// </summary>
     public DbSet<PlatformSetting> PlatformSettings { get; set; } = null!;

@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Administration;
+using RustArchon.Api.Billing;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Security;
@@ -43,6 +44,8 @@ public class InternalController : ControllerBase
     private readonly IOrganizationProvisioningService _provisioning;
     private readonly ApiDbContext _dbContext;
     private readonly Infrastructure.ObjectStorage.IObjectStorage _objectStorage;
+    private readonly IPaymentService _paymentService;
+    private readonly IStripeCredentialProvider _stripeCredentials;
 
     public InternalController(
         IPublishEndpoint publishEndpoint,
@@ -54,7 +57,9 @@ public class InternalController : ControllerBase
         ICommunicationRepository communicationRepository,
         IOrganizationProvisioningService provisioning,
         ApiDbContext dbContext,
-        Infrastructure.ObjectStorage.IObjectStorage objectStorage)
+        Infrastructure.ObjectStorage.IObjectStorage objectStorage,
+        IPaymentService paymentService,
+        IStripeCredentialProvider stripeCredentials)
     {
         _publishEndpoint = publishEndpoint ?? throw new ArgumentNullException(nameof(publishEndpoint));
         _rustServerRepository = rustServerRepository ?? throw new ArgumentNullException(nameof(rustServerRepository));
@@ -66,6 +71,8 @@ public class InternalController : ControllerBase
         _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
         _objectStorage = objectStorage ?? throw new ArgumentNullException(nameof(objectStorage));
+        _paymentService = paymentService ?? throw new ArgumentNullException(nameof(paymentService));
+        _stripeCredentials = stripeCredentials ?? throw new ArgumentNullException(nameof(stripeCredentials));
     }
 
     /// <summary>
@@ -192,6 +199,17 @@ public class InternalController : ControllerBase
     }
 
     /// <summary>
+    /// This deployment's Stripe webhook signing secret, decrypted - called by RustArchon.Panel's own
+    /// public webhook route on every inbound Stripe event, to verify the payload before trusting
+    /// anything in it. Same "not cached anywhere" reasoning as <see cref="GetEmailSettings"/>: a Stripe
+    /// webhook firing is rare enough that a Postgres round trip per delivery is not a hot path worth
+    /// protecting.
+    /// </summary>
+    [HttpGet("stripe/webhook-secret")]
+    public async Task<ActionResult<string>> GetStripeWebhookSecret() =>
+        Ok(await _stripeCredentials.GetWebhookSecretAsync());
+
+    /// <summary>
     /// The platform's current email delivery configuration, secrets decrypted - called by
     /// <c>RustArchon.Worker</c>'s email consumers on every send (real or test) rather than cached
     /// anywhere, since sending an email is rare enough that there's no hot path here to protect. See
@@ -222,6 +240,76 @@ public class InternalController : ControllerBase
             ApiKey: Decrypt(PlatformSettingsRegistry.EmailApiKey, ApiKeyProtectorPurposes.EmailApiKey),
             DefaultFromAddress: Value(PlatformSettingsRegistry.EmailDefaultFromAddress),
             DefaultFromName: Value(PlatformSettingsRegistry.EmailDefaultFromName));
+    }
+
+    /// <summary>
+    /// Records a Stripe-confirmed payment against an invoice - called by RustArchon.Panel's own public
+    /// Stripe webhook route once it has verified the event's signature and confirmed the Checkout
+    /// Session actually completed as paid. This Api never talks to Stripe's inbound webhook directly
+    /// (see <see cref="RecordStripePaymentRequestDto"/>'s remarks) - by the time this is called, Stripe
+    /// itself is out of the picture and this is exactly a payment being recorded, same as
+    /// <c>BillingController.RecordPayment</c>'s manual-entry path, just with a
+    /// <see cref="RecordStripePaymentRequestDto.ProviderPaymentId"/> attached for idempotency against
+    /// Stripe's at-least-once delivery.
+    /// </summary>
+    [HttpPost("stripe/payments")]
+    public async Task<IActionResult> RecordStripePayment(
+        [FromBody] RecordStripePaymentRequestDto request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _paymentService.RecordPaymentAsync(
+                request.InvoiceId, request.Amount, PaymentMethod.Card, receivedOn: null,
+                reference: request.ProviderPaymentId, providerPaymentId: request.ProviderPaymentId,
+                cancellationToken: cancellationToken);
+        }
+        catch (InvalidOperationException)
+        {
+            // The invoice named in a webhook payload no longer exists - can't happen through this
+            // codebase's own checkout-session creation, but the Panel's webhook route is handling
+            // external input regardless of how the payload was produced. 404, not 500: there is nothing
+            // wrong with this Api, and Panel's own logging is where the real diagnosis happens.
+            return NotFound();
+        }
+
+        return Accepted();
+    }
+
+    /// <summary>
+    /// Records a Stripe payment-attempt failure - called by RustArchon.Panel's own public Stripe webhook
+    /// route on a verified <c>payment_intent.payment_failed</c> event. Never allocates anything and
+    /// never touches the invoice named; it exists purely so the decline is visible on the Payment Ledger
+    /// report - see <see cref="IPaymentService.RecordFailedPaymentAsync"/>'s own remarks.
+    /// </summary>
+    [HttpPost("stripe/payments/failed")]
+    public async Task<IActionResult> RecordFailedStripePayment(
+        [FromBody] RecordFailedStripePaymentRequestDto request, CancellationToken cancellationToken)
+    {
+        await _paymentService.RecordFailedPaymentAsync(
+            request.InvoiceId, request.Amount, PaymentMethod.Card, request.ProviderPaymentId,
+            request.ProviderEventId, request.FailureCode, request.FailureMessage, cancellationToken);
+
+        // Unlike RecordStripePayment, a missing invoice and an already-recorded event both come back as
+        // null rather than an exception - neither is this Api being asked to do something invalid, both
+        // are "there's nothing new to record", so both get the same 202 rather than one of them being a
+        // 404 someone has to explain.
+        return Accepted();
+    }
+
+    /// <summary>
+    /// Records a Stripe chargeback - called by RustArchon.Panel's own public Stripe webhook route on a
+    /// verified <c>charge.dispute.created</c> event. See
+    /// <see cref="IPaymentService.RecordDisputeAsync"/>'s own remarks for why this never touches Stripe's
+    /// API itself.
+    /// </summary>
+    [HttpPost("stripe/disputes")]
+    public async Task<IActionResult> RecordStripeDispute(
+        [FromBody] RecordStripeDisputeRequestDto request, CancellationToken cancellationToken)
+    {
+        await _paymentService.RecordDisputeAsync(
+            request.ProviderPaymentId, request.DisputeId, request.Reason, request.DueBy, cancellationToken);
+
+        return Accepted();
     }
 
     /// <summary>
