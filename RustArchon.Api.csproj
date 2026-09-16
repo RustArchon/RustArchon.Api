@@ -10,26 +10,26 @@
 
   <ItemGroup>
     <PackageReference Include="AutoMapper" Version="16.2.0" />
-    <PackageReference Include="AWSSDK.S3" Version="4.0.103.2" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.10" />
-    <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.11" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
+    <PackageReference Include="AWSSDK.S3" Version="4.0.103.3" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.12" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.10">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.0.12">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     <!-- Valkey speaks the Redis protocol, so the standard Redis client works against it unmodified. -->
-    <PackageReference Include="StackExchange.Redis" Version="2.8.41" />
+    <PackageReference Include="StackExchange.Redis" Version="3.2.1" />
     <!-- Pinned to the last open-source MassTransit release - v9 is commercial. See README. -->
     <PackageReference Include="MassTransit" Version="[8.5.10]" />
     <PackageReference Include="MassTransit.RabbitMQ" Version="[8.5.10]" />
     <!-- Stripe Checkout only (payment mode, one already-priced invoice at a time) - never Stripe's own
          Subscriptions/Billing product, which can't express PlanChangeCalculator's proration model. See
          StripeCheckoutService's remarks. -->
-    <PackageReference Include="Stripe.net" Version="48.5.0" />
+    <PackageReference Include="Stripe.net" Version="52.4.2" />
   </ItemGroup>
 
   <ItemGroup>
