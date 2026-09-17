@@ -29,7 +29,10 @@ public interface IStripeCheckoutService
     /// </param>
     /// <returns>
     /// The hosted Checkout URL to redirect the browser to, or <c>null</c> if the invoice doesn't exist,
-    /// doesn't belong to this tenant, isn't <see cref="InvoiceStatus.Open"/>, or is already settled.
+    /// doesn't belong to this tenant, isn't <see cref="InvoiceStatus.Open"/>, is already settled, or this
+    /// deployment has no Stripe secret key configured yet - every case refused before Stripe's own API
+    /// is ever called, so an unconfigured deployment fails the same clean way an unpayable invoice does
+    /// rather than throwing whatever exception an empty API key happens to produce.
     /// </returns>
     Task<string?> CreateCheckoutSessionAsync(
         Guid tenantId, Guid invoiceId, string successUrl, string cancelUrl,
@@ -75,7 +78,17 @@ public class StripeCheckoutService(
             return null;
         }
 
-        var requestOptions = new RequestOptions { ApiKey = await credentials.GetSecretKeyAsync() };
+        var secretKey = await credentials.GetSecretKeyAsync();
+        if (string.IsNullOrEmpty(secretKey))
+        {
+            // No restricted key configured yet (see IStripeCredentialProvider) - refuse here, the same
+            // way an unpayable invoice is refused above, rather than letting Stripe.net throw on an
+            // empty ApiKey further down. Deliberately not logged as a warning/error: an unconfigured
+            // deployment simply hasn't set this up yet, which is a supported, expected state.
+            return null;
+        }
+
+        var requestOptions = new RequestOptions { ApiKey = secretKey };
 
         var sessionOptions = new SessionCreateOptions
         {
