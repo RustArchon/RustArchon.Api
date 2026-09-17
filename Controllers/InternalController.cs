@@ -313,6 +313,34 @@ public class InternalController : ControllerBase
     }
 
     /// <summary>
+    /// Records a Stripe dispute's final outcome - called by RustArchon.Panel's own public Stripe webhook
+    /// route on a verified <c>charge.dispute.closed</c> event. See
+    /// <see cref="IPaymentService.RecordDisputeClosedAsync"/>'s own remarks for why a <c>won</c> outcome
+    /// here doesn't reinstate anything by itself.
+    /// </summary>
+    [HttpPost("stripe/disputes/closed")]
+    public async Task<IActionResult> RecordStripeDisputeClosed(
+        [FromBody] RecordStripeDisputeClosedRequestDto request, CancellationToken cancellationToken)
+    {
+        await _paymentService.RecordDisputeClosedAsync(request.DisputeId, request.Status, cancellationToken);
+        return Accepted();
+    }
+
+    /// <summary>
+    /// Reinstates a payment after a won dispute's funds actually return - called by RustArchon.Panel's
+    /// own public Stripe webhook route on a verified <c>charge.dispute.funds_reinstated</c> event. See
+    /// <see cref="IPaymentService.RecordDisputeFundsReinstatedAsync"/>'s own remarks for the Stripe Tax
+    /// caveat this deliberately leaves to manual reconciliation.
+    /// </summary>
+    [HttpPost("stripe/disputes/funds-reinstated")]
+    public async Task<IActionResult> RecordStripeDisputeFundsReinstated(
+        [FromBody] RecordStripeDisputeFundsReinstatedRequestDto request, CancellationToken cancellationToken)
+    {
+        await _paymentService.RecordDisputeFundsReinstatedAsync(request.DisputeId, cancellationToken);
+        return Accepted();
+    }
+
+    /// <summary>
     /// One file from a theme's package, by the same relative path it was uploaded under (e.g.
     /// <c>theme.css</c>, <c>images/hero.png</c>) - called by RustArchon.Panel's own public
     /// <c>/theme-assets/...</c> route, the seam a browser's anonymous, same-origin

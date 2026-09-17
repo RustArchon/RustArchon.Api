@@ -121,6 +121,35 @@ public interface IPaymentService
         string providerPaymentId, string disputeId, string? reason, DateTimeOffset? dueBy,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Records a Stripe dispute's final outcome - called on a verified <c>charge.dispute.closed</c>
+    /// webhook. <paramref name="status"/> is one of Stripe's own values (<c>won</c>, <c>lost</c>, or
+    /// <c>warning_closed</c>) and is stored as-is; this changes nothing about the payment or invoice
+    /// itself, since a <c>lost</c> dispute has no more money to move and a <c>won</c> one still needs
+    /// <see cref="RecordDisputeFundsReinstatedAsync"/> before the funds are actually back.
+    /// </summary>
+    /// <param name="disputeId">Stripe's own dispute id - how this is matched back to the
+    /// <see cref="Payment"/> row <see cref="RecordDisputeAsync"/> already tagged with it.</param>
+    /// <returns>The now-closed payment, or <c>null</c> if no payment matches <paramref name="disputeId"/>.</returns>
+    Task<Payment?> RecordDisputeClosedAsync(
+        string disputeId, string status, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reinstates a payment after a won dispute's funds actually return - called on a verified
+    /// <c>charge.dispute.funds_reinstated</c> webhook. Re-applies whatever
+    /// <see cref="RecordDisputeAsync"/> originally reversed for this dispute, re-settling any invoice it
+    /// reopened, and returns the payment to <see cref="PaymentStatus.Succeeded"/>.
+    /// </summary>
+    /// <remarks>
+    /// Does not attempt to re-create the Stripe Tax transaction <see cref="RecordDisputeAsync"/>'s own
+    /// reversal removed - see <c>PaymentService</c>'s own remarks for why that's a manual reconciliation
+    /// step, not something this call does for you.
+    /// </remarks>
+    /// <param name="disputeId">Stripe's own dispute id - how this is matched back to a payment.</param>
+    /// <returns>The reinstated payment, or <c>null</c> if no payment matches <paramref name="disputeId"/>.</returns>
+    Task<Payment?> RecordDisputeFundsReinstatedAsync(
+        string disputeId, CancellationToken cancellationToken = default);
+
     /// <summary>Grants value back against an invoice without money moving.</summary>
     Task<CreditNote?> IssueCreditNoteAsync(
         Guid invoiceId, decimal amount, string reason, CancellationToken cancellationToken = default);
