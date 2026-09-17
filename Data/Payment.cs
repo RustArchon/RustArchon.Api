@@ -94,6 +94,42 @@ public class Payment : Entity
     /// </summary>
     public DateTimeOffset? DisputeEvidenceSubmittedOn { get; set; }
 
+    /// <summary>
+    /// Stripe's own final outcome for the dispute - <c>won</c>, <c>lost</c>, or <c>warning_closed</c> -
+    /// set the moment a <c>charge.dispute.closed</c> webhook is recorded. Null until the dispute closes.
+    /// A <c>lost</c> dispute needs nothing further done to it: the money is already gone (see
+    /// <see cref="DisputeId"/>'s own remarks - a chargeback never had a Stripe refund call to reverse in
+    /// the first place), so this is purely the record that the case is over rather than still pending. A
+    /// <c>won</c> dispute doesn't reinstate anything by itself either - see
+    /// <see cref="DisputeFundsReinstatedOn"/> for why Stripe reports the outcome decision and the money
+    /// actually moving back as two separate events.
+    /// </summary>
+    [MaxLength(50)]
+    public string? DisputeStatus { get; set; }
+
+    /// <summary>When <c>charge.dispute.closed</c> was recorded for this payment's dispute.</summary>
+    public DateTimeOffset? DisputeClosedOn { get; set; }
+
+    /// <summary>
+    /// How much <c>PaymentService.ApplyReversalAsync</c> actually reversed when this dispute was first
+    /// recorded (see <c>PaymentService.RecordDisputeAsync</c>) - captured here so a later
+    /// <c>charge.dispute.funds_reinstated</c> knows exactly how much to give back without re-deriving it
+    /// from allocations that may have changed since (a partial refund issued some other way while the
+    /// dispute was still open, for instance). Zero if there was nothing live left to reverse at the time.
+    /// </summary>
+    [Column(TypeName = "numeric(18,2)")]
+    public decimal DisputeAmountReversed { get; set; }
+
+    /// <summary>
+    /// When <c>charge.dispute.funds_reinstated</c> was recorded - Stripe's own signal that a won
+    /// dispute's money actually came back into the Stripe balance, not just that the outcome was
+    /// decided. Deliberately a separate moment from <see cref="DisputeClosedOn"/>: Stripe can report a
+    /// dispute <c>won</c> before the funds move, and <c>PaymentService.RecordDisputeFundsReinstatedAsync</c>
+    /// is what actually re-settles the invoice - a decided-but-not-yet-reinstated win leaves the invoice
+    /// reopened on purpose, since the money genuinely isn't back yet.
+    /// </summary>
+    public DateTimeOffset? DisputeFundsReinstatedOn { get; set; }
+
     /// <summary>Optional note for a manually-recorded payment - a cheque number, a bank reference.</summary>
     [MaxLength(500)]
     public string? Reference { get; set; }

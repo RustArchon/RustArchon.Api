@@ -429,6 +429,11 @@ public class PaymentService(
                 .ToList();
             var totalLive = live.Sum(a => a.Amount - a.ReversedAmount);
 
+            // Captured regardless of whether there was anything to reverse - see
+            // Payment.DisputeAmountReversed's own remarks for why RecordDisputeFundsReinstatedAsync
+            // needs this rather than re-deriving it later.
+            payment.DisputeAmountReversed = totalLive;
+
             if (totalLive > 0m)
             {
                 var invoiceIds = live.Select(a => a.InvoiceId).Distinct().ToList();
@@ -458,6 +463,154 @@ public class PaymentService(
             payment.Id, disputeId, reason, dueBy);
 
         return payment;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Records the outcome only - a <c>lost</c> dispute needs nothing further (the money was already
+    /// gone the moment <see cref="RecordDisputeAsync"/> ran), and a <c>won</c> one doesn't reinstate
+    /// anything here either. See <see cref="RecordDisputeFundsReinstatedAsync"/> for why those are two
+    /// separate calls.
+    /// </remarks>
+    public async Task<Payment?> RecordDisputeClosedAsync(
+        string disputeId, string status, CancellationToken cancellationToken = default)
+    {
+        var payment = await dbContext.Set<Payment>()
+            .FirstOrDefaultAsync(p => p.DisputeId == disputeId, cancellationToken);
+
+        if (payment is null)
+        {
+            logger.LogWarning(
+                "A Stripe dispute-closed event named dispute {DisputeId}, which matches no recorded payment - not recorded.",
+                disputeId);
+            return null;
+        }
+
+        if (payment.DisputeClosedOn.HasValue)
+        {
+            logger.LogInformation(
+                "Dispute {DisputeId} for payment {PaymentId} already recorded as closed; skipping.",
+                disputeId, payment.Id);
+            return payment;
+        }
+
+        payment.DisputeStatus = status;
+        payment.DisputeClosedOn = timeProvider.GetUtcNow();
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        logger.LogWarning(
+            "Stripe dispute {DisputeId} for payment {PaymentId} closed: {Status}.", disputeId, payment.Id, status);
+
+        return payment;
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Mirrors <see cref="ApplyReversalAsync"/>: walks this payment's own reversed allocations, oldest
+    /// first (the same ordering every other reversal/reinstatement here uses), and gives back exactly
+    /// <see cref="Payment.DisputeAmountReversed"/> across them, re-settling whichever invoices they
+    /// belong to. The payment itself returns to <see cref="PaymentStatus.Succeeded"/> once nothing on it
+    /// is left reversed.
+    /// </para>
+    /// <para>
+    /// <strong>Deliberately does not attempt to re-establish Stripe Tax.</strong>
+    /// <see cref="IStripeTaxService.ReverseAsync"/> is one-directional by design, and this codebase
+    /// models one <see cref="Invoice.TaxTransactionId"/> per invoice, not a ledger of several - creating
+    /// a fresh tax transaction for money that left and came back is a real, jurisdiction- and
+    /// timing-dependent accounting question, not something safe to auto-approximate. Logged as a warning
+    /// so a site admin knows to reconcile it by hand.
+    /// </para>
+    /// </remarks>
+    public async Task<Payment?> RecordDisputeFundsReinstatedAsync(
+        string disputeId, CancellationToken cancellationToken = default)
+    {
+        var payment = await dbContext.Set<Payment>()
+            .Include(p => p.Allocations)
+            .FirstOrDefaultAsync(p => p.DisputeId == disputeId, cancellationToken);
+
+        if (payment is null)
+        {
+            logger.LogWarning(
+                "A Stripe funds-reinstated event named dispute {DisputeId}, which matches no recorded payment - not recorded.",
+                disputeId);
+            return null;
+        }
+
+        if (payment.DisputeFundsReinstatedOn.HasValue)
+        {
+            logger.LogInformation(
+                "Dispute {DisputeId} for payment {PaymentId} already recorded as reinstated; skipping.",
+                disputeId, payment.Id);
+            return payment;
+        }
+
+        if (payment.DisputeAmountReversed > 0m)
+        {
+            await ReinstateAsync(payment, payment.DisputeAmountReversed, cancellationToken);
+        }
+
+        payment.DisputeFundsReinstatedOn = timeProvider.GetUtcNow();
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        logger.LogWarning(
+            "Stripe dispute {DisputeId} for payment {PaymentId} reinstated {Amount} - Stripe Tax reconciliation " +
+            "for this invoice needs manual review; no tax transaction was recreated automatically.",
+            disputeId, payment.Id, payment.DisputeAmountReversed);
+
+        return payment;
+    }
+
+    /// <summary>
+    /// The bookkeeping half of a won-and-reinstated dispute - see
+    /// <see cref="RecordDisputeFundsReinstatedAsync"/>'s own remarks for the tax caveat this
+    /// deliberately doesn't handle.
+    /// </summary>
+    private async Task ReinstateAsync(Payment payment, decimal amount, CancellationToken cancellationToken)
+    {
+        var reversed = payment.Allocations
+            .Where(a => a.ReversedAmount > 0m)
+            .OrderBy(a => a.AllocatedOn)
+            .ToList();
+
+        var invoiceIds = reversed.Select(a => a.InvoiceId).Distinct().ToList();
+        var invoices = await dbContext.Set<Invoice>()
+            .Where(i => invoiceIds.Contains(i.Id))
+            .ToDictionaryAsync(i => i.Id, cancellationToken);
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var remaining = amount;
+        foreach (var allocation in reversed)
+        {
+            if (remaining <= 0m)
+            {
+                break;
+            }
+
+            var giveBack = Math.Min(remaining, allocation.ReversedAmount);
+            allocation.ReversedAmount -= giveBack;
+            if (allocation.ReversedAmount <= 0m)
+            {
+                allocation.ReversedOn = null;
+            }
+
+            if (invoices.TryGetValue(allocation.InvoiceId, out var invoice))
+            {
+                invoice.AmountPaid += giveBack;
+                Settle(invoice);
+            }
+
+            remaining -= giveBack;
+        }
+
+        if (payment.Allocations.Sum(a => a.ReversedAmount) <= 0m)
+        {
+            payment.Status = PaymentStatus.Succeeded;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     /// <inheritdoc />
