@@ -36,11 +36,18 @@ namespace RustArchon.Api.Infrastructure;
 /// </para>
 /// <para>
 /// <strong>Idempotent, not a live toggle:</strong> runs on every startup (see <c>Program.cs</c>,
-/// alongside the migration step) but only inserts the row if a code with that exact value doesn't
-/// already exist - it never reactivates or re-binds one that's already been redeemed, and changing
-/// <c>RUSTARCHON_ADMIN_CODE</c> later just seeds an additional code rather than replacing the
-/// first. Bypasses <c>IInvitationCodeRepository</c> and writes to <see cref="ApiDbContext"/> directly,
-/// the same way <c>Database.Migrate()</c> does in <c>Program.cs</c> - there's no authenticated user or
+/// alongside the migration step). If no row with that exact code exists yet, it inserts one. If a row
+/// with that code already exists but hasn't been redeemed, its <see cref="InvitationCode.BoundEmail"/>
+/// is kept in sync with the currently-configured <c>RUSTARCHON_ADMIN_EMAIL</c> - an operator who
+/// deploys with a typo'd email, notices, and corrects it in <c>.env</c> before ever registering should
+/// have that correction actually take effect on the next startup, rather than silently binding to the
+/// wrong address forever because a row already happened to exist. It never reactivates or re-binds one
+/// that's already been redeemed - that's someone's real, already-claimed account. Changing
+/// <c>RUSTARCHON_ADMIN_CODE</c> itself (not just the email) still seeds an additional code rather than
+/// replacing the first, since the code is the unique key rows are found by; an operator who does that
+/// can deactivate the orphaned old code from the Invitation Codes admin page once they're able to log
+/// in. Bypasses <c>IInvitationCodeRepository</c> and writes to <see cref="ApiDbContext"/> directly, the
+/// same way <c>Database.Migrate()</c> does in <c>Program.cs</c> - there's no authenticated user or
 /// tenant context at this point in startup for the normal repository audit-field plumbing to use.
 /// </para>
 /// </remarks>
@@ -69,30 +76,44 @@ public static class AdminInvitationSeeder
         // redeem comparison additionally strips dashes from both sides, so a code with or without
         // dashes here behaves identically either way.
         var code = seedInvitationCode.Trim().ToUpperInvariant();
+        var normalizedEmail = adminEmail.Trim().ToLowerInvariant();
 
-        var alreadyExists = await dbContext.InvitationCodes.AnyAsync(c => c.Code == code);
-        if (alreadyExists)
+        var existing = await dbContext.InvitationCodes.FirstOrDefaultAsync(c => c.Code == code);
+
+        if (existing is null)
         {
+            dbContext.InvitationCodes.Add(new InvitationCode
+            {
+                Code = code,
+                BoundEmail = normalizedEmail,
+                Note = "Seeded automatically from RUSTARCHON_ADMIN_CODE - see AdminInvitationSeeder.",
+                IsActive = true,
+                // No authenticated actor exists at startup - Guid.Empty marks this as system-seeded
+                // rather than attributing it to whichever user happens to redeem it or leaving it unset.
+                CreatedById = Guid.Empty,
+                CreatedOn = DateTimeOffset.UtcNow
+            });
+
+            await dbContext.SaveChangesAsync();
+
+            logger.LogInformation(
+                "Seeded a bootstrap invitation code for {AdminEmail} - register at /Account/Register " +
+                "with that email and the code from RUSTARCHON_ADMIN_CODE to claim the platform-admin " +
+                "account.",
+                adminEmail);
             return;
         }
 
-        dbContext.InvitationCodes.Add(new InvitationCode
+        if (existing.RedeemedAtUtc is null && existing.BoundEmail != normalizedEmail)
         {
-            Code = code,
-            BoundEmail = adminEmail.Trim().ToLowerInvariant(),
-            Note = "Seeded automatically from RUSTARCHON_ADMIN_CODE - see AdminInvitationSeeder.",
-            IsActive = true,
-            // No authenticated actor exists at startup - Guid.Empty marks this as system-seeded rather
-            // than attributing it to whichever user happens to redeem it or leaving it unset.
-            CreatedById = Guid.Empty,
-            CreatedOn = DateTimeOffset.UtcNow
-        });
+            var previousEmail = existing.BoundEmail;
+            existing.BoundEmail = normalizedEmail;
+            await dbContext.SaveChangesAsync();
 
-        await dbContext.SaveChangesAsync();
-
-        logger.LogInformation(
-            "Seeded a bootstrap invitation code for {AdminEmail} - register at /Account/Register with " +
-            "that email and the code from RUSTARCHON_ADMIN_CODE to claim the platform-admin account.",
-            adminEmail);
+            logger.LogWarning(
+                "RUSTARCHON_ADMIN_EMAIL changed from {PreviousEmail} to {AdminEmail} - rebound the " +
+                "existing, still-unclaimed bootstrap invitation code to the new address.",
+                previousEmail, adminEmail);
+        }
     }
 }
