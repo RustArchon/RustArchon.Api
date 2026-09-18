@@ -150,7 +150,8 @@ public class OrganizationAdminService(
                 StartDate = s.StartDate,
                 EndDate = s.EndDate,
                 Status = s.Status,
-                PeriodCount = s.Periods.Count
+                PeriodCount = s.Periods.Count,
+                PlanChangeReason = s.PlanChangeReason
             })
             .ToListAsync(cancellationToken);
 
