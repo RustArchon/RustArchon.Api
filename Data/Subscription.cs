@@ -118,6 +118,23 @@ public class Subscription : Entity
     [MaxLength(500)]
     public string? StatusReason { get; set; }
 
+    /// <summary>
+    /// Why a site admin force-moved the tenant onto this <see cref="Plan"/> immediately, bypassing the
+    /// normal upgrade/downgrade timing and proration rules - null for every other way a row here gets
+    /// opened (sign-up, a tenant's own self-service change, <c>ReopenAsync</c>,
+    /// <see cref="Infrastructure.SubscriptionScheduleService"/> applying a scheduled change).
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="StatusReason"/> on purpose - that field answers why the subscription's
+    /// <em>status</em> last moved, not why it's on a different <em>plan</em>, and the two can change
+    /// independently. See <c>OrganizationLifecycleService.ForcePlanChangeAsync</c>.
+    /// </remarks>
+    [MaxLength(500)]
+    public string? PlanChangeReason { get; set; }
+
+    /// <summary>The site admin who forced this plan change, or null - see <see cref="PlanChangeReason"/>.</summary>
+    public Guid? PlanChangedById { get; set; }
+
     /// <summary>The billing periods charged under this subscription - see
     /// <see cref="SubscriptionPeriod"/>.</summary>
     public ICollection<SubscriptionPeriod> Periods { get; set; } = [];

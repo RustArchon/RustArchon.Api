@@ -74,4 +74,36 @@ public interface IOrganizationLifecycleService
     /// <summary>Brings a cancelled Organization back, on the plan a site admin chooses.</summary>
     Task<bool> ReopenAsync(
         Guid tenantId, Guid planId, int termMonths, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves an already-active Organization onto a different plan immediately - no upgrade/downgrade
+    /// timing decision, no proration, no invoice, and no refund, unlike a tenant's own self-service
+    /// change (<see cref="Billing.ISubscriptionService.ApplyAsync"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For an admin correction or a comped plan, not a customer-facing feature. What stays enforced:
+    /// the target plan must exist and be <c>Active</c>, and it must be able to hold the Organization's
+    /// current server count. What a "force" deliberately skips: the price-comparison timing rule, all
+    /// proration math, any invoice, and <see cref="Plan.OnePerOwner"/>.
+    /// </para>
+    /// <para>
+    /// Any pending <c>ScheduledPlanChange</c> the tenant already had queued is cancelled as a side
+    /// effect, so it can't silently re-apply on top of the forced plan later.
+    /// </para>
+    /// </remarks>
+    /// <param name="quantity">Slots to hold, or null to derive them the same way a normal change would.</param>
+    /// <param name="reason">Required - see <see cref="Data.Subscription.PlanChangeReason"/>.</param>
+    Task<AdminForcePlanChangeResult> ForcePlanChangeAsync(
+        Guid tenantId, Guid planId, int termMonths, int? quantity, string reason,
+        CancellationToken cancellationToken = default);
 }
+
+/// <summary>Outcome of <see cref="IOrganizationLifecycleService.ForcePlanChangeAsync"/>.</summary>
+/// <param name="Success">Whether the plan was actually changed.</param>
+/// <param name="Error">
+/// Why not, when <paramref name="Success"/> is false - specific enough to show an admin directly (e.g.
+/// naming the server-count shortfall), the same way the tenant-facing quote's own
+/// <c>PlanChangeQuoteDto.BlockedReason</c> is.
+/// </param>
+public sealed record AdminForcePlanChangeResult(bool Success, string? Error);
