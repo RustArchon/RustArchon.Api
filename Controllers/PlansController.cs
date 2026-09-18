@@ -51,12 +51,29 @@ public class PlansController : ControllerBase
     /// Turns the price rows a client sent into entities, de-duplicated by term.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The de-duplication matters: a unique index enforces one price per (plan, term), and a form that
     /// submitted the same term twice would otherwise fail at the database with a constraint violation
     /// rather than a message anyone can act on. Last one wins, which is what a user editing a row twice
     /// would expect.
+    /// </para>
+    /// <para>
+    /// <strong>A flat-tier row's <see cref="PlanPrice.IncludedUnits"/> is forced to
+    /// <paramref name="maximumServers"/>, never taken from the client.</strong> It's the only place a
+    /// flat-tier subscription's actual granted capacity lives -
+    /// <see cref="Billing.PlanChangeCalculator.ResolveQuantity"/> and
+    /// <see cref="Billing.SubscriptionService.GetAsync"/> both resolve it from here precisely because
+    /// <see cref="PlanPrice.UnitAmount"/> is always zero on a flat tier, which is what makes
+    /// <c>ResolveQuantity</c> return <see cref="PlanPrice.IncludedUnits"/> outright rather than
+    /// consulting <paramref name="maximumServers"/> itself (see that method's remarks) - so a flat-tier
+    /// plan whose price rows don't carry the ceiling grants zero servers regardless of what
+    /// <see cref="Plan.MaximumServers"/> says, the same way <see cref="Infrastructure.PlanSeeder"/>'s
+    /// own <c>FlatPrice</c> helper sets it for the four built-in plans. Left alone for a per-unit plan,
+    /// where a genuine included-units count is exactly what the client is choosing.
+    /// </para>
     /// </remarks>
-    private static List<PlanPrice> ToPrices(IEnumerable<PlanPriceDto> prices) =>
+    private static List<PlanPrice> ToPrices(
+        IEnumerable<PlanPriceDto> prices, PricingModel pricingModel, int? maximumServers) =>
         prices
             .GroupBy(p => p.TermMonths)
             .Select(g => g.Last())
@@ -64,7 +81,7 @@ public class PlansController : ControllerBase
             {
                 TermMonths = p.TermMonths,
                 BaseAmount = p.BaseAmount,
-                IncludedUnits = p.IncludedUnits,
+                IncludedUnits = pricingModel == PricingModel.Flat ? maximumServers ?? 0 : p.IncludedUnits,
                 UnitAmount = p.UnitAmount,
                 Currency = string.IsNullOrWhiteSpace(p.Currency) ? "USD" : p.Currency.ToUpperInvariant()
             })
@@ -112,7 +129,7 @@ public class PlansController : ControllerBase
         // Prices are set here rather than by the mapper - see PlanMappingProfile for why that map is
         // ignored, and ToPrices for the de-duplication the unique index depends on.
         var entity = _mapper.Map<Plan>(createDto);
-        entity.Prices = ToPrices(createDto.Prices);
+        entity.Prices = ToPrices(createDto.Prices, createDto.PricingModel, createDto.MaximumServers);
 
         var created = await _repository.AddAsync(entity);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, await ToDtoAsync(created));
@@ -151,7 +168,8 @@ public class PlansController : ControllerBase
 
         // Replaced separately: UpdateAsync copies scalar values onto the tracked entity and doesn't
         // touch child collections, so removing a term would otherwise silently do nothing.
-        await _repository.ReplacePricesAsync(id, ToPrices(updateDto.Prices));
+        await _repository.ReplacePricesAsync(
+            id, ToPrices(updateDto.Prices, updateDto.PricingModel, updateDto.MaximumServers));
 
         var refreshed = await _repository.GetByIdAsync(id, null) ?? updated;
         return Ok(await ToDtoAsync(refreshed));
@@ -196,7 +214,7 @@ public class PlansController : ControllerBase
             MaximumServers = supersedeDto.MaximumServers,
             MaximumUsers = supersedeDto.MaximumUsers,
             Active = true,
-            Prices = ToPrices(supersedeDto.Prices)
+            Prices = ToPrices(supersedeDto.Prices, supersedeDto.PricingModel, supersedeDto.MaximumServers)
         });
 
         return Ok(await ToDtoAsync(newPlan));
