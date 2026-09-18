@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using JumpStart.Data;
+using JumpStart.Repositories;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,9 @@ public class OrganizationLifecycleService(
     ApiDbContext dbContext,
     IPublishEndpoint publishEndpoint,
     ICommunicationPublisher communicationPublisher,
+    ISubscriptionService subscriptionService,
+    IRoleCompressionService roleCompression,
+    IUserContext userContext,
     TimeProvider timeProvider,
     ILogger<OrganizationLifecycleService> logger) : IOrganizationLifecycleService
 {
@@ -304,6 +308,141 @@ public class OrganizationLifecycleService(
         }
 
         return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<AdminForcePlanChangeResult> ForcePlanChangeAsync(
+        Guid tenantId, Guid planId, int termMonths, int? quantity, string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (!BillingTerms.IsValid(termMonths))
+        {
+            throw new ArgumentOutOfRangeException(nameof(termMonths), "That is not a billing term.");
+        }
+
+        var currentSubscription = await dbContext.Set<Subscription>()
+            .FirstOrDefaultAsync(s => s.TenantId == tenantId && s.EndDate == null, cancellationToken);
+
+        if (currentSubscription is null)
+        {
+            return new AdminForcePlanChangeResult(
+                false, "This organization has no open subscription - reopen it instead.");
+        }
+
+        var plan = await dbContext.Set<Plan>()
+            .Include(p => p.Prices)
+            .FirstOrDefaultAsync(p => p.Id == planId, cancellationToken);
+
+        if (plan is null || !plan.Active)
+        {
+            return new AdminForcePlanChangeResult(false, "That plan doesn't exist or isn't active.");
+        }
+
+        var serverCount = await dbContext.Set<RustServer>()
+            .AcrossAllTenants()
+            .CountAsync(s => s.TenantId == tenantId, cancellationToken);
+
+        // Kept even for a forced change - not a pricing/timing decision like the rules this bypasses,
+        // but a data-integrity one: letting Quantity end up below the servers actually running would
+        // corrupt every report and invariant that assumes it never does (see
+        // Billing.PlanChangeCalculator.ResolveQuantity's own remarks).
+        if (plan.MaximumServers is { } ceiling && ceiling < serverCount)
+        {
+            return new AdminForcePlanChangeResult(
+                false,
+                $"The {plan.Name} plan allows up to {ceiling} server(s), and this organization currently "
+                + $"has {serverCount}. Remove {serverCount - ceiling} server(s) first.");
+        }
+
+        var resolvedQuantity = PlanChangeCalculator.ResolveQuantity(plan, termMonths, quantity, serverCount);
+        if (resolvedQuantity < serverCount)
+        {
+            return new AdminForcePlanChangeResult(
+                false,
+                $"That quantity ({resolvedQuantity}) is fewer than the {serverCount} server(s) currently "
+                + "running.");
+        }
+
+        // Supersedes anything the tenant had queued themselves - a forced change that a pending
+        // self-service change then silently overwrote on its own effective date would be a confusing
+        // way for this override to quietly undo itself.
+        await subscriptionService.CancelScheduledChangeAsync(tenantId, cancellationToken);
+
+        var now = timeProvider.GetUtcNow();
+        var oldPlanName = currentSubscription.PlanId == plan.Id
+            ? plan.Name
+            : (await dbContext.Set<Plan>().FirstOrDefaultAsync(p => p.Id == currentSubscription.PlanId, cancellationToken))?.Name
+                ?? "(unknown)";
+
+        // No reconciliation of the closing slice's EarnedAmount - a forced change is neither charged nor
+        // refunded, so whatever was already recognized for the elapsed portion simply stands.
+        var currentSlice = await dbContext.Set<SubscriptionPeriod>()
+            .Where(p => p.SubscriptionId == currentSubscription.Id)
+            .OrderByDescending(p => p.PeriodStart)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (currentSlice is not null)
+        {
+            currentSlice.EndDate = now;
+        }
+
+        currentSubscription.EndDate = now;
+
+        var actingAdminId = await userContext.GetCurrentUserIdAsync();
+        var periodEnd = now.AddMonths(termMonths);
+
+        var newSubscription = new Subscription
+        {
+            TenantId = tenantId,
+            PlanId = plan.Id,
+            StartDate = now,
+            Status = SubscriptionStatus.Active,
+            PlanChangeReason = reason,
+            PlanChangedById = actingAdminId
+        };
+        dbContext.Set<Subscription>().Add(newSubscription);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        // A fresh period at list price. Not invoiced - same reasoning as ReopenAsync: this is an admin
+        // override of the normal billing rules, not a purchase, and whoever authorized it decides
+        // separately whether anything is owed.
+        dbContext.Set<SubscriptionPeriod>().Add(new SubscriptionPeriod
+        {
+            SubscriptionId = newSubscription.Id,
+            TermMonths = termMonths,
+            Quantity = resolvedQuantity,
+            PeriodStart = now,
+            PeriodEnd = periodEnd,
+            StartDate = now,
+            EndDate = periodEnd,
+            EarnedAmount = PlanChangeCalculator.PriceFor(plan, termMonths, resolvedQuantity)
+        });
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        // Same defensive behavior SubscriptionScheduleService.TryApplyChangeAsync already applies when a
+        // scheduled change lands on a plan without role separation - a forced move can land there too.
+        if (!plan.HasRoles)
+        {
+            var compressed = await roleCompression.CompressAsync(
+                tenantId,
+                $"Force-moved to '{plan.Name}', which does not include role separation.",
+                cancellationToken);
+
+            if (compressed.IsNeeded)
+            {
+                logger.LogWarning(
+                    "Tenant {TenantId} force-moved to '{PlanName}' and was compressed: {Promoted} "
+                    + "member(s) now hold Owner, {Removed} custom role(s) retired.",
+                    tenantId, plan.Name, compressed.MembersPromoted, compressed.RolesRemoved);
+            }
+        }
+
+        logger.LogWarning(
+            "Organization {TenantId} force-moved from '{OldPlan}' to '{NewPlan}' ({Term} month term, "
+            + "{Quantity} slot(s)) by admin {AdminId}. Reason: {Reason}",
+            tenantId, oldPlanName, plan.Name, termMonths, resolvedQuantity, actingAdminId, reason);
+
+        return new AdminForcePlanChangeResult(true, null);
     }
 
     /// <summary>

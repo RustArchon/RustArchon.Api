@@ -241,4 +241,28 @@ public class OrganizationsController(
             ? NoContent()
             : Conflict("That organization could not be reopened - it may already have an open subscription.");
     }
+
+    /// <summary>
+    /// Moves an already-active Organization onto a different plan immediately - see
+    /// <see cref="IOrganizationLifecycleService.ForcePlanChangeAsync"/>.
+    /// </summary>
+    [HttpPost("{tenantId:guid}/force-plan-change")]
+    public async Task<IActionResult> ForcePlanChange(
+        Guid tenantId, [FromBody] AdminForcePlanChangeRequestDto request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Requiring a reason is not paperwork - same reasoning as suspension above: it is the only thing
+        // that answers "why is this organization suddenly on a different plan?" three weeks later.
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            return BadRequest("A reason is required when forcing a plan change.");
+        }
+
+        var result = await lifecycle.ForcePlanChangeAsync(
+            tenantId, request.PlanId, request.TermMonths, request.Quantity, request.Reason.Trim(),
+            cancellationToken);
+
+        return result.Success ? NoContent() : BadRequest(result.Error);
+    }
 }
