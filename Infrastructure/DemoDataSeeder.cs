@@ -149,6 +149,7 @@ public static class DemoDataSeeder
             $"""DELETE FROM "PlayerKillEvent" WHERE "TenantId" IN ({owned})""",
             $"""DELETE FROM "PlayerSession" WHERE "TenantId" IN ({owned})""",
             $"""DELETE FROM "ServerInfoSnapshot" WHERE "TenantId" IN ({owned})""",
+            $"""DELETE FROM "ServerPlugin" WHERE "TenantId" IN ({owned})""",
             $"""DELETE FROM "RustServer" WHERE "TenantId" IN ({owned})""",
             $"""DELETE FROM "Tenant" WHERE "CreatedById" = '{MarkerId}'"""
         };
