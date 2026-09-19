@@ -9,14 +9,17 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.Threading.RateLimiting;
 using RustArchon.Api.Administration;
 using RustArchon.Api.Billing;
 using RustArchon.Api.Data;
 using RustArchon.Api.Hubs;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Authentication;
+using RustArchon.Api.Infrastructure.Captcha;
 using RustArchon.Api.Infrastructure.Geolocation;
 using RustArchon.Api.Infrastructure.Geolocation.Providers;
 using RustArchon.Api.Infrastructure.ObjectStorage;
@@ -350,6 +353,9 @@ builder.Services.AddScoped<IOrganizationSettingsService, OrganizationSettingsSer
 // OrganizationInvitationService, which depends on it.
 builder.Services.AddScoped<ICommunicationPublisher, CommunicationPublisher>();
 
+// Guards the anonymous public ticket-submission form - see CaptchaVerifierFactory's remarks.
+builder.Services.AddScoped<ICaptchaVerifierFactory, CaptchaVerifierFactory>();
+
 // Inviting somebody who is not a member yet - the only way the membership list grows to include a
 // person who could not already reach it. The lifecycle (tokens, expiry, revocation, binding a
 // redemption to the invited address) is JumpStart's ITenantInvitationService, registered by
@@ -491,6 +497,31 @@ builder.Services.AddCors(options =>
 });
 
 // ============================================
+// 7b. RATE LIMITING
+// ============================================
+// Guards TicketSubmissionController - the one endpoint on this Api an unauthenticated, unknown caller
+// can make it write to the database. Keyed by remote IP: 5 submissions per 10 minutes, queueing none -
+// a caller past the limit is told to slow down (429) immediately rather than waiting in line, since a
+// queued-then-accepted burst from the same IP is exactly the scripted-abuse pattern this exists to stop.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // AddPolicy (not the simpler AddFixedWindowLimiter) specifically so this partitions by caller -
+    // a single unpartitioned limiter would share its 5-per-window budget across every visitor at once,
+    // which is not remotely what "rate limit per submitter" means.
+    options.AddPolicy("ticket-submission", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0
+            }));
+});
+
+// ============================================
 // 8. HTTP CONTEXT ACCESSOR (for IUserContext/ITenantContext)
 // ============================================
 builder.Services.AddHttpContextAccessor();
@@ -578,6 +609,16 @@ using (var migrationScope = app.Services.CreateScope())
     // See PlanSeeder's remarks - seeds the four initial pricing tiers (Wood/Stone/Metal/HQM) if no
     // Plan rows exist yet at all.
     await PlanSeeder.EnsureDefaultsAsync(
+        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See QueueSeeder's remarks - seeds the three starter support-ticket queues (Support/Pre-Sales/
+    // Bug Reports) if no Queue rows exist yet at all.
+    await QueueSeeder.EnsureDefaultsAsync(
+        dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
+
+    // See TicketStatusSeeder's remarks - seeds the six starter ticket statuses (five the lifecycle
+    // itself depends on, plus Cancelled) if no TicketStatus rows exist yet at all.
+    await TicketStatusSeeder.EnsureDefaultsAsync(
         dbContext, migrationScope.ServiceProvider.GetRequiredService<ILogger<Program>>());
 
     // See BuiltInRoleSeeder's remarks - one platform-wide "Owner" role granted inside each
@@ -697,6 +738,10 @@ app.UseCors("AllowBlazorServer");
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// After UseForwardedHeaders above, so the "ticket-submission" policy partitions by the real client IP
+// rather than the reverse proxy's.
+app.UseRateLimiter();
 
 app.MapControllers();
 app.MapHub<RconHub>("/hubs/rcon");

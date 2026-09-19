@@ -16,6 +16,8 @@ using Microsoft.Extensions.Logging;
 using RustArchon.Api.Administration;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
+using RustArchon.Api.Repositories;
+using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Controllers;
 
@@ -51,6 +53,7 @@ public class AccountBootstrapController : ControllerBase
     private readonly IOrganizationProvisioningService _provisioning;
     private readonly IUserTenantRepository _userTenantRepository;
     private readonly IRoleRepository _roleRepository;
+    private readonly ITicketRepository _tickets;
     private readonly ApiDbContext _dbContext;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AccountBootstrapController> _logger;
@@ -59,6 +62,7 @@ public class AccountBootstrapController : ControllerBase
         IOrganizationProvisioningService provisioning,
         IUserTenantRepository userTenantRepository,
         IRoleRepository roleRepository,
+        ITicketRepository tickets,
         ApiDbContext dbContext,
         IConfiguration configuration,
         ILogger<AccountBootstrapController> logger)
@@ -66,6 +70,7 @@ public class AccountBootstrapController : ControllerBase
         _provisioning = provisioning ?? throw new ArgumentNullException(nameof(provisioning));
         _userTenantRepository = userTenantRepository ?? throw new ArgumentNullException(nameof(userTenantRepository));
         _roleRepository = roleRepository ?? throw new ArgumentNullException(nameof(roleRepository));
+        _tickets = tickets ?? throw new ArgumentNullException(nameof(tickets));
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -133,6 +138,64 @@ public class AccountBootstrapController : ControllerBase
 
         await _provisioning.CreateAsync(
             userId, tenantName, planId: null, enforceOnePerOwner: false, cancellationToken);
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Relinks a guest ticket to the calling user's own account and tenant - called right after
+    /// sign-up when the new user arrived via a guest ticket's "Sign up" link. Lives here, not on
+    /// <c>TicketsController</c>, for the same reason <see cref="EnsureTenant"/> does: this runs from
+    /// <c>Register.razor</c>'s static form-post handler, before any Blazor circuit exists, so it has
+    /// to be reachable with the same short-lived identity-assertion bearer token
+    /// <see cref="EnsureTenant"/> uses - no tenant_id claim, no <c>JwtExchangeHandler</c>. The tenant
+    /// is therefore resolved the same way <see cref="EnsureTenant"/> resolves "does this user already
+    /// have one" - via <see cref="IUserTenantRepository.GetTenantsForUserAsync"/> - rather than trusted
+    /// from a claim.
+    /// </summary>
+    /// <remarks>
+    /// Requires both proof of ownership (the token itself) and a matching verified email, exactly like
+    /// <c>InvitationAcceptanceController.Accept</c>'s own <c>WrongRecipient</c> check - see
+    /// <c>ClaimGuestTicketRequestDto</c>'s remarks.
+    /// </remarks>
+    [HttpPost("claim-ticket")]
+    [Authorize]
+    public async Task<IActionResult> ClaimTicket(
+        [FromBody] ClaimGuestTicketRequestDto request, CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (!Guid.TryParse(userIdClaim, out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var tenants = await _userTenantRepository.GetTenantsForUserAsync(userId);
+        var tenantId = tenants.FirstOrDefault()?.Id;
+
+        if (tenantId is null)
+        {
+            // Should not happen - EnsureTenant runs first and guarantees exactly one - but this is
+            // still a relink onto a tenant, so refusing outright beats silently leaving TenantId null.
+            return NotFound();
+        }
+
+        var verifiedEmail = User.Identity?.Name;
+        var ticket = await _tickets.GetByGuestAccessTokenAsync(request.Token, cancellationToken);
+
+        if (ticket is null)
+        {
+            return NotFound();
+        }
+
+        if (string.IsNullOrEmpty(verifiedEmail)
+            || !string.Equals(ticket.SubmitterEmail, verifiedEmail, StringComparison.OrdinalIgnoreCase))
+        {
+            return Forbid();
+        }
+
+        ticket.SubmitterUserId = userId;
+        ticket.TenantId = tenantId;
+        await _tickets.SaveAsync(ticket, cancellationToken);
 
         return NoContent();
     }

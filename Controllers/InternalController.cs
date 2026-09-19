@@ -243,6 +243,29 @@ public class InternalController : ControllerBase
     }
 
     /// <summary>
+    /// The platform's current ticketing-integration configuration, secret decrypted - called by
+    /// <c>RustArchon.Worker</c>'s <c>TicketEventConsumer</c> on every ticket event rather than cached
+    /// anywhere, same "not a hot path" reasoning as <see cref="GetEmailSettings"/>.
+    /// </summary>
+    [HttpGet("ticketing-settings")]
+    public async Task<ActionResult<InternalTicketingSettingsDto>> GetTicketingSettings()
+    {
+        var settings = (await _platformSettingRepository.GetAllAsync())
+            .ToDictionary(s => s.Key, s => s);
+
+        string Value(string key) => settings.TryGetValue(key, out var s) ? s.Value : string.Empty;
+
+        var webhookSecret = Value(PlatformSettingsRegistry.TicketingWebhookSecret);
+
+        return new InternalTicketingSettingsDto(
+            Provider: Value(PlatformSettingsRegistry.TicketingProvider),
+            WebhookUrl: Value(PlatformSettingsRegistry.TicketingWebhookUrl),
+            WebhookSecret: string.IsNullOrEmpty(webhookSecret)
+                ? string.Empty
+                : _apiKeyProtector.Unprotect(ApiKeyProtectorPurposes.TicketingWebhookSecret, webhookSecret));
+    }
+
+    /// <summary>
     /// Records a Stripe-confirmed payment against an invoice - called by RustArchon.Panel's own public
     /// Stripe webhook route once it has verified the event's signature and confirmed the Checkout
     /// Session actually completed as paid. This Api never talks to Stripe's inbound webhook directly

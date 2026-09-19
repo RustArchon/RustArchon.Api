@@ -46,6 +46,7 @@ public static class PlatformSettingsRegistry
         public const string Billing = "Billing";
         public const string Payments = "Payments";
         public const string Email = "Email";
+        public const string Ticketing = "Ticketing";
     }
 
     /// <summary>
@@ -58,6 +59,32 @@ public static class PlatformSettingsRegistry
         public const string Smtp = "Smtp";
         public const string Resend = "Resend";
         public const string SendGrid = "SendGrid";
+    }
+
+    /// <summary>
+    /// The values <see cref="TicketingProvider"/> can hold - see <c>RustArchon.Worker</c>'s
+    /// <c>TicketingIntegrationProviderFactory</c>, the only other place these exact strings matter.
+    /// Only <see cref="Internal"/> and <see cref="Webhook"/> exist today; a named vendor integration
+    /// (Zendesk, etc.) is a future addition to this set plus a new
+    /// <c>ITicketingIntegrationProvider</c>, not a rework of the seam itself.
+    /// </summary>
+    public static class TicketingProviders
+    {
+        public const string Internal = "Internal";
+        public const string Webhook = "Webhook";
+    }
+
+    /// <summary>
+    /// The values <see cref="CaptchaProvider"/> can hold - see
+    /// <c>RustArchon.Api.Infrastructure.Captcha.CaptchaVerifierFactory</c>, the only other place these
+    /// exact strings matter. Gates only the anonymous public ticket-submission form today - the one
+    /// unauthenticated, form-filling surface this platform has.
+    /// </summary>
+    public static class CaptchaProviders
+    {
+        public const string None = "None";
+        public const string ReCaptcha = "ReCaptcha";
+        public const string Turnstile = "Turnstile";
     }
 
     /// <summary>
@@ -229,6 +256,51 @@ public static class PlatformSettingsRegistry
 
     /// <summary>Encrypted at rest - see <see cref="Data.PlatformSettingValueType.Secret"/>.</summary>
     public const string EmailSmtpPassword = "EmailSmtpPassword";
+
+    /// <summary>
+    /// Which ticketing backend a submitted <see cref="Data.Ticket"/>'s events are mirrored to -
+    /// site-owner-global, a <see cref="PlatformSettingValueType.Choice"/> among
+    /// <see cref="TicketingProviders"/>. The internal ticket system (Admin/Tickets, My Tickets) is
+    /// always the real place a ticket lives and gets answered regardless of this setting - see
+    /// <see cref="TicketingWebhookUrl"/>'s remarks for what "Webhook" actually does and doesn't do.
+    /// </summary>
+    public const string TicketingProvider = "TicketingProvider";
+
+    /// <summary>
+    /// Where a signed ticket-event payload is POSTed when <see cref="TicketingProvider"/> is
+    /// <see cref="TicketingProviders.Webhook"/>. Push-only, one-way notification - it lets the
+    /// receiving system know a ticket was created or replied to, not a two-way sync; a reply typed on
+    /// the far end never comes back into this system. Only shown while <see cref="TicketingProvider"/>
+    /// is <see cref="TicketingProviders.Webhook"/>.
+    /// </summary>
+    public const string TicketingWebhookUrl = "TicketingWebhookUrl";
+
+    /// <summary>
+    /// The shared secret <c>TicketEventConsumer</c> HMAC-SHA256-signs each webhook payload with, so the
+    /// receiving system can verify a delivery genuinely came from here. Encrypted at rest - see
+    /// <see cref="Data.PlatformSettingValueType.Secret"/>. Only shown while <see cref="TicketingProvider"/>
+    /// is <see cref="TicketingProviders.Webhook"/>.
+    /// </summary>
+    public const string TicketingWebhookSecret = "TicketingWebhookSecret";
+
+    /// <summary>
+    /// Which captcha vendor guards the anonymous public ticket-submission form - a
+    /// <see cref="PlatformSettingValueType.Choice"/> among <see cref="CaptchaProviders"/>, default
+    /// <see cref="CaptchaProviders.None"/> (no captcha - fine for local dev, not recommended once the
+    /// form is public).
+    /// </summary>
+    public const string CaptchaProvider = "CaptchaProvider";
+
+    /// <summary>The public site key the contact form's captcha widget renders with - safe to expose
+    /// anonymously (see <see cref="Controllers.PublicTicketingConfigController"/>), unlike
+    /// <see cref="CaptchaSecretKey"/>. Only shown while <see cref="CaptchaProvider"/> is not
+    /// <see cref="CaptchaProviders.None"/>.</summary>
+    public const string CaptchaSiteKey = "CaptchaSiteKey";
+
+    /// <summary>The private key the Api calls the captcha vendor's verify endpoint with. Encrypted at
+    /// rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. Only shown while
+    /// <see cref="CaptchaProvider"/> is not <see cref="CaptchaProviders.None"/>.</summary>
+    public const string CaptchaSecretKey = "CaptchaSecretKey";
 
     /// <summary>
     /// Encrypted at rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. Shown only while
@@ -527,6 +599,89 @@ public static class PlatformSettingsRegistry
             defaultValue: string.Empty,
             visibleWhenKey: EmailServiceProvider,
             visibleWhenValue: EmailProviders.Smtp,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: TicketingProvider,
+            category: Categories.Ticketing,
+            order: 10,
+            displayName: "Ticketing provider",
+            description: "Where support ticket events are mirrored. The internal ticket system " +
+                "always stays the real place a ticket is answered - Webhook only sends a one-way " +
+                "notification elsewhere, it doesn't hand the conversation off.",
+            valueType: PlatformSettingValueType.Choice,
+            options: $"{TicketingProviders.Internal},{TicketingProviders.Webhook}",
+            defaultValue: TicketingProviders.Internal,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: TicketingWebhookUrl,
+            category: Categories.Ticketing,
+            order: 20,
+            displayName: "Webhook URL",
+            description: "Where a signed ticket-event payload is POSTed.",
+            valueType: PlatformSettingValueType.String,
+            defaultValue: string.Empty,
+            visibleWhenKey: TicketingProvider,
+            visibleWhenValue: TicketingProviders.Webhook,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: TicketingWebhookSecret,
+            category: Categories.Ticketing,
+            order: 30,
+            displayName: "Webhook signing secret",
+            description: "Signs each payload (HMAC-SHA256) so the receiving system can verify it " +
+                "genuinely came from here. Encrypted at rest.",
+            valueType: PlatformSettingValueType.Secret,
+            defaultValue: string.Empty,
+            visibleWhenKey: TicketingProvider,
+            visibleWhenValue: TicketingProviders.Webhook,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: CaptchaProvider,
+            category: Categories.Ticketing,
+            order: 40,
+            displayName: "Captcha provider",
+            description: "Guards the public contact form's ticket submission against bots. None is " +
+                "fine for local development; leaving it None on a publicly-reachable deployment " +
+                "invites spam.",
+            valueType: PlatformSettingValueType.Choice,
+            options: $"{CaptchaProviders.None},{CaptchaProviders.ReCaptcha},{CaptchaProviders.Turnstile}",
+            defaultValue: CaptchaProviders.None,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: CaptchaSiteKey,
+            category: Categories.Ticketing,
+            order: 50,
+            displayName: "Captcha site key",
+            description: "The public key the contact form's captcha widget renders with.",
+            valueType: PlatformSettingValueType.String,
+            defaultValue: string.Empty,
+            visibleWhenKey: CaptchaProvider,
+            visibleWhenValue: CaptchaProviders.None,
+            visibleWhenNegate: true,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: CaptchaSecretKey,
+            category: Categories.Ticketing,
+            order: 60,
+            displayName: "Captcha secret key",
+            description: "The private key the Api verifies a submitted captcha token with. Encrypted at rest.",
+            valueType: PlatformSettingValueType.Secret,
+            defaultValue: string.Empty,
+            visibleWhenKey: CaptchaProvider,
+            visibleWhenValue: CaptchaProviders.None,
+            visibleWhenNegate: true,
             logger: logger);
     }
 
