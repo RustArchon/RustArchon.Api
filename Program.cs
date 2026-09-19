@@ -199,6 +199,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<PlayerKilledConsumer>();
     x.AddConsumer<PlayerSessionSnapshotUpdatedConsumer>();
     x.AddConsumer<ServerInfoSnapshotCapturedConsumer>();
+    x.AddConsumer<ServerPluginsCapturedConsumer>();
     x.AddConsumer<WorkerDiagnosticLoggedConsumer>();
     x.AddConsumer<CommunicationDeliveredConsumer>();
 

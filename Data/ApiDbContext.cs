@@ -80,6 +80,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<ServerInfoSnapshot> ServerInfoSnapshots { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the ServerPlugin DbSet.
+    /// </summary>
+    public DbSet<ServerPlugin> ServerPlugins { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the Plan DbSet.
     /// </summary>
     public DbSet<Plan> Plans { get; set; } = null!;

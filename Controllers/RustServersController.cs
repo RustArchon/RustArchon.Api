@@ -45,6 +45,7 @@ public class RustServersController
     private readonly IPlayerKillEventRepository _playerKillEventRepository;
     private readonly IServerInfoSnapshotRepository _serverInfoSnapshotRepository;
     private readonly IConnectionLogRepository _connectionLogRepository;
+    private readonly IServerPluginRepository _serverPluginRepository;
     private readonly ISubscriptionRepository _subscriptionRepository;
 
     public RustServersController(
@@ -62,6 +63,7 @@ public class RustServersController
         IPlayerKillEventRepository playerKillEventRepository,
         IServerInfoSnapshotRepository serverInfoSnapshotRepository,
         IConnectionLogRepository connectionLogRepository,
+        IServerPluginRepository serverPluginRepository,
         ISubscriptionRepository subscriptionRepository)
         : base(repository, mapper, logger, correlationContext)
     {
@@ -75,6 +77,7 @@ public class RustServersController
         _playerKillEventRepository = playerKillEventRepository ?? throw new ArgumentNullException(nameof(playerKillEventRepository));
         _serverInfoSnapshotRepository = serverInfoSnapshotRepository ?? throw new ArgumentNullException(nameof(serverInfoSnapshotRepository));
         _connectionLogRepository = connectionLogRepository ?? throw new ArgumentNullException(nameof(connectionLogRepository));
+        _serverPluginRepository = serverPluginRepository ?? throw new ArgumentNullException(nameof(serverPluginRepository));
         _subscriptionRepository = subscriptionRepository ?? throw new ArgumentNullException(nameof(subscriptionRepository));
     }
 
@@ -669,6 +672,25 @@ public class RustServersController
 
         var entries = await _connectionLogRepository.GetForServerAsync(id, sinceValue, untilValue);
         return Ok(_mapper.Map<IEnumerable<ConnectionLogEntryDto>>(entries));
+    }
+
+    /// <summary>
+    /// Gets the Oxide/Carbon plugins last reported loaded on this server, ordered by name - see
+    /// <see cref="ServerPlugin"/>. Empty when the server has no plugin framework, has none loaded, or
+    /// simply hasn't been polled yet (the Worker's first poll runs shortly after it connects).
+    /// </summary>
+    [HttpGet("{id}/plugins")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<IEnumerable<ServerPluginDto>>> GetPlugins(Guid id)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        var plugins = await _serverPluginRepository.GetForServerAsync(id);
+        return Ok(_mapper.Map<IEnumerable<ServerPluginDto>>(plugins));
     }
 
     /// <summary>
