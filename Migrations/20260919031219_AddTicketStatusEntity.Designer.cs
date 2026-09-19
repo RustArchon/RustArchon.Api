@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260919031219_AddTicketStatusEntity")]
+    partial class AddTicketStatusEntity
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2423,9 +2426,6 @@ namespace RustArchon.Api.Migrations
 
                     b.Property<DateTimeOffset?>("ModifiedOn")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("PreventReopening")
-                        .HasColumnType("boolean");
 
                     b.Property<Guid>("QueueId")
                         .HasColumnType("uuid");

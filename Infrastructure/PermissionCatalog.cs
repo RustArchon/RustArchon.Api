@@ -94,6 +94,16 @@ public static class PermissionCatalog
     /// </remarks>
     public const string OrganizationManageSettings = "Organization.ManageSettings";
 
+    /// <summary>
+    /// Submitting a support ticket on the Organization's behalf, and viewing/replying to the
+    /// Organization's own tickets.
+    /// </summary>
+    /// <remarks>
+    /// Delegable, same reasoning as <see cref="OrganizationManageSettings"/>: nothing here spends
+    /// money or reshapes who holds what, so any role can safely include it.
+    /// </remarks>
+    public const string OrganizationSubmitTickets = "Organization.SubmitTickets";
+
     // ---- Platform-scoped: running the business, never held inside a tenant ----
 
     public const string PlatformManageInvitations = "Platform.ManageInvitations";
@@ -111,7 +121,8 @@ public static class PermissionCatalog
     [
         ServerGet, ServerList, ServerCreate, ServerUpdate, ServerDelete, ServerSendCommand,
         SubscriptionView, SubscriptionManage,
-        OrganizationManageMembers, OrganizationManageRoles, OrganizationManageSettings
+        OrganizationManageMembers, OrganizationManageRoles, OrganizationManageSettings,
+        OrganizationSubmitTickets
     ];
 
     /// <summary>Every platform permission - what the "Site Admin" role holds.</summary>
@@ -155,6 +166,8 @@ public static class PermissionCatalog
             "Define the organization's own roles - Owner only, and only on a plan that includes it."),
         new(OrganizationManageSettings, PermissionScope.Tenant, "Organization", DelegableByTenantAdmin: true,
             "Change the organization's name and contact address."),
+        new(OrganizationSubmitTickets, PermissionScope.Tenant, "Organization", DelegableByTenantAdmin: true,
+            "Submit support tickets, and view and reply to the organization's own tickets."),
 
         new(PlatformManageInvitations, PermissionScope.Platform, "Platform"),
         new(PlatformManageSettings, PermissionScope.Platform, "Platform"),

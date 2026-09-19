@@ -107,6 +107,12 @@ public static class EmailTemplateRegistry
         /// tenant whose invoice is currently blocked on a missing Stripe tax registration, grouped by
         /// jurisdiction, rather than one email per blocked invoice.</summary>
         public const string TaxRegistrationNeeded = "TaxRegistrationNeeded";
+
+        /// <summary>Sent by <c>TicketsController.Create</c> when a ticket is submitted.</summary>
+        public const string TicketReceived = "TicketReceived";
+
+        /// <summary>Sent by <c>AdminTicketsController.AddMessage</c> when staff reply to a ticket.</summary>
+        public const string TicketNewReply = "TicketNewReply";
     }
 
     /// <summary>The stable <see cref="Data.EmailPlaceholder.Name"/> values calling code asks for -
@@ -153,6 +159,14 @@ public static class EmailTemplateRegistry
         /// template here describes exactly one thing.
         /// </summary>
         public const string BlockedJurisdictionList = "BlockedJurisdictionList";
+
+        public const string TicketSubject = "TicketSubject";
+
+        /// <summary>The link back into the Panel for the submitter to view/reply - see
+        /// <c>Codes.TicketReceived</c>/<c>Codes.TicketNewReply</c>. A guest (account-less) submitter's
+        /// token-gated equivalent is stage-3 work, not built yet - every ticket these two templates are
+        /// sent for today has a signed-in tenant submitter.</summary>
+        public const string TicketLink = "TicketLink";
     }
 
     public static async Task EnsureDefaultsAsync(ApiDbContext dbContext, ILogger logger)
@@ -268,6 +282,20 @@ public static class EmailTemplateRegistry
             description: "Pre-rendered list markup - one line per jurisdiction, with how many invoices " +
                 "and organizations it's blocking.",
             sample: "<li><strong>NY, US</strong> - 2 invoice(s) across 2 organization(s), blocked since 2 Sep 2026</li>",
+            logger: logger);
+
+        var ticketSubject = await EnsurePlaceholderAsync(
+            dbContext,
+            name: Placeholders.TicketSubject,
+            description: "The ticket's own subject line.",
+            sample: "Can't connect to my server",
+            logger: logger);
+
+        var ticketLink = await EnsurePlaceholderAsync(
+            dbContext,
+            name: Placeholders.TicketLink,
+            description: "The link back into the Panel to view the ticket and reply.",
+            sample: "https://panel.example.com/Tickets/00000000-0000-0000-0000-000000000000",
             logger: logger);
 
         await EnsureTemplateAsync(
@@ -487,6 +515,34 @@ public static class EmailTemplateRegistry
                 once you do, with no other action needed here.</p>
                 """,
             placeholders: [siteName, siteUrl, blockedOrganizationCount, blockedJurisdictionList],
+            logger: logger);
+
+        await EnsureTemplateAsync(
+            dbContext,
+            code: Codes.TicketReceived,
+            name: "Ticket received",
+            description: "Sent when a support ticket is submitted.",
+            defaultSubject: "We've received your ticket: {{TicketSubject}}",
+            defaultHtmlBody:
+                """
+                <p>Thanks - we've received your ticket, <strong>{{TicketSubject}}</strong>.</p>
+                <p><a href="{{TicketLink}}">View your ticket</a> to track its status or add more detail.</p>
+                """,
+            placeholders: [siteName, siteUrl, ticketSubject, ticketLink],
+            logger: logger);
+
+        await EnsureTemplateAsync(
+            dbContext,
+            code: Codes.TicketNewReply,
+            name: "New ticket reply",
+            description: "Sent when staff reply to a ticket.",
+            defaultSubject: "New reply on your ticket: {{TicketSubject}}",
+            defaultHtmlBody:
+                """
+                <p>There's a new reply on your ticket, <strong>{{TicketSubject}}</strong>.</p>
+                <p><a href="{{TicketLink}}">View the reply</a>.</p>
+                """,
+            placeholders: [siteName, siteUrl, ticketSubject, ticketLink],
             logger: logger);
     }
 

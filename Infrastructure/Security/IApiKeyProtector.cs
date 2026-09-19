@@ -38,4 +38,6 @@ public static class ApiKeyProtectorPurposes
     public const string EmailApiKey = "RustArchon.PlatformSetting.EmailApiKey.v1";
     public const string StripeSecretKey = "RustArchon.PlatformSetting.StripeSecretKey.v1";
     public const string StripeWebhookSecret = "RustArchon.PlatformSetting.StripeWebhookSecret.v1";
+    public const string TicketingWebhookSecret = "RustArchon.PlatformSetting.TicketingWebhookSecret.v1";
+    public const string CaptchaSecretKey = "RustArchon.PlatformSetting.CaptchaSecretKey.v1";
 }

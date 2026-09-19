@@ -163,6 +163,35 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<Communication> Communications { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the Queues DbSet - the buckets a <see cref="Ticket"/> is routed into. See
+    /// <see cref="Queue"/>.
+    /// </summary>
+    public DbSet<Queue> Queues { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the TicketStatuses DbSet - the states a <see cref="Ticket"/> can be in. See
+    /// <see cref="Data.TicketStatus"/>.
+    /// </summary>
+    public DbSet<TicketStatus> TicketStatuses { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the Tickets DbSet. See <see cref="Ticket"/>.
+    /// </summary>
+    public DbSet<Ticket> Tickets { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the TicketMessages DbSet - a ticket's customer-visible thread. See
+    /// <see cref="TicketMessage"/>.
+    /// </summary>
+    public DbSet<TicketMessage> TicketMessages { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the TicketNotes DbSet - staff-only annotations on a ticket. See
+    /// <see cref="TicketNote"/>.
+    /// </summary>
+    public DbSet<TicketNote> TicketNotes { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the Themes DbSet - the catalog of uploaded theme packages. See <see cref="Theme"/>.
     /// </summary>
     public DbSet<Theme> Themes { get; set; } = null!;
@@ -393,6 +422,61 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
         modelBuilder.Entity<Communication>()
             .HasIndex(c => c.UserId)
             .HasDatabaseName("IX_Communication_UserId");
+
+        modelBuilder.Entity<Queue>()
+            .HasIndex(q => q.Slug)
+            .IsUnique()
+            .HasDatabaseName("IX_Queue_Slug");
+
+        modelBuilder.Entity<TicketStatus>()
+            .HasIndex(s => s.Slug)
+            .IsUnique()
+            .HasDatabaseName("IX_TicketStatus_Slug");
+
+        // The staff console filters by queue, by status, and by tenant (an Organization's own ticket
+        // history); GuestAccessToken is looked up on its own by the anonymous guest-ticket page, so it
+        // gets a unique index rather than sharing one of these.
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.QueueId)
+            .HasDatabaseName("IX_Ticket_QueueId");
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.StatusId)
+            .HasDatabaseName("IX_Ticket_StatusId");
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.TenantId)
+            .HasDatabaseName("IX_Ticket_TenantId");
+
+        modelBuilder.Entity<Ticket>()
+            .HasIndex(t => t.GuestAccessToken)
+            .IsUnique()
+            .HasDatabaseName("IX_Ticket_GuestAccessToken");
+
+        // A ticket is never deleted once submitted, so its Queue can't be either while any Ticket
+        // still points at it - QueueSeeder/the admin UI retire a queue via IsActive instead.
+        modelBuilder.Entity<Ticket>()
+            .HasOne(t => t.Queue)
+            .WithMany()
+            .HasForeignKey(t => t.QueueId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // Same reasoning as the Queue relationship just above - AdminTicketStatusesController checks
+        // for in-use statuses itself before deleting one, but this is the backstop.
+        modelBuilder.Entity<Ticket>()
+            .HasOne(t => t.Status)
+            .WithMany()
+            .HasForeignKey(t => t.StatusId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // How the staff console and the tenant/guest thread views both list a ticket's conversation.
+        modelBuilder.Entity<TicketMessage>()
+            .HasIndex(m => m.TicketId)
+            .HasDatabaseName("IX_TicketMessage_TicketId");
+
+        modelBuilder.Entity<TicketNote>()
+            .HasIndex(n => n.TicketId)
+            .HasDatabaseName("IX_TicketNote_TicketId");
 
         // Belt-and-suspenders alongside ThemeService.ActivateAsync's own application-level enforcement
         // (see Theme.IsActive's remarks) - a partial unique index means "more than one active theme"

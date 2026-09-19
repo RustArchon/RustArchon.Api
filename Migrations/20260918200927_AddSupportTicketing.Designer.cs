@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260918200927_AddSupportTicketing")]
+    partial class AddSupportTicketing
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2424,17 +2427,14 @@ namespace RustArchon.Api.Migrations
                     b.Property<DateTimeOffset?>("ModifiedOn")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<bool>("PreventReopening")
-                        .HasColumnType("boolean");
-
                     b.Property<Guid>("QueueId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset?>("ResolvedOn")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid>("StatusId")
-                        .HasColumnType("uuid");
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
 
                     b.Property<string>("Subject")
                         .IsRequired()
@@ -2468,9 +2468,6 @@ namespace RustArchon.Api.Migrations
 
                     b.HasIndex("QueueId")
                         .HasDatabaseName("IX_Ticket_QueueId");
-
-                    b.HasIndex("StatusId")
-                        .HasDatabaseName("IX_Ticket_StatusId");
 
                     b.HasIndex("TenantId")
                         .HasDatabaseName("IX_Ticket_TenantId");
@@ -2565,60 +2562,6 @@ namespace RustArchon.Api.Migrations
                         .HasDatabaseName("IX_TicketNote_TicketId");
 
                     b.ToTable("TicketNotes");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.TicketStatus", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("CreatedById")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedOn")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("DeletedById")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("DeletedOn")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("DisplayOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsClosed")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("IsProtected")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid?>("ModifiedById")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("ModifiedOn")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Slug")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Slug")
-                        .IsUnique()
-                        .HasDatabaseName("IX_TicketStatus_Slug");
-
-                    b.ToTable("TicketStatuses");
                 });
 
             modelBuilder.Entity("EmailPlaceholderEmailTemplate", b =>
@@ -3078,19 +3021,11 @@ namespace RustArchon.Api.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("RustArchon.Api.Data.TicketStatus", "Status")
-                        .WithMany()
-                        .HasForeignKey("StatusId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
                         .WithMany()
                         .HasForeignKey("TenantId");
 
                     b.Navigation("Queue");
-
-                    b.Navigation("Status");
 
                     b.Navigation("Tenant");
                 });
