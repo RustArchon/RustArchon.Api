@@ -47,8 +47,9 @@ public class MapPreviewRenderer : IMapPreviewRenderer
             // Strict: the whole picture must decode. Skia will happily render the top half of a truncated PNG, and a half-drawn
             // map must not be presented as the map.
             using var codec = SKCodec.Create(new SKMemoryStream(picture));
-            if (codec is null || codec.Info.Width <= 0 || codec.Info.Height <= 0)
+            if (codec is null || !PngHeader.IsAcceptableMapSize(codec.Info.Width, codec.Info.Height))
             {
+                // Refused before anything is allocated: the bitmap below is width x height x 4 bytes.
                 return null;
             }
 
