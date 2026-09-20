@@ -47,6 +47,7 @@ public static class PlatformSettingsRegistry
         public const string Payments = "Payments";
         public const string Email = "Email";
         public const string Ticketing = "Ticketing";
+        public const string Plugin = "Plugin";
     }
 
     /// <summary>
@@ -301,6 +302,15 @@ public static class PlatformSettingsRegistry
     /// rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. Only shown while
     /// <see cref="CaptchaProvider"/> is not <see cref="CaptchaProviders.None"/>.</summary>
     public const string CaptchaSecretKey = "CaptchaSecretKey";
+
+    /// <summary>
+    /// The private half of this deployment's RustArchon-plugin signing key (RSA-2048, PKCS#8, base64), encrypted at
+    /// rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. <b>Generated automatically, once, the first
+    /// time the plugin script is downloaded</b>; nothing else creates it. The public half is derived from it on demand
+    /// rather than stored, so the two can never disagree. Replacing it strands every plugin already installed from
+    /// this Panel: they trust the old key and will refuse anything signed by the new one.
+    /// </summary>
+    public const string PluginSigningKey = "PluginSigningKey";
 
     /// <summary>
     /// Encrypted at rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. Shown only while
@@ -682,6 +692,20 @@ public static class PlatformSettingsRegistry
             visibleWhenKey: CaptchaProvider,
             visibleWhenValue: CaptchaProviders.None,
             visibleWhenNegate: true,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PluginSigningKey,
+            category: Categories.Plugin,
+            order: 10,
+            displayName: "Plugin signing key (private)",
+            description: "Signs the RustArchon server plugin this Panel serves, and the updates it sends. Generated " +
+                "automatically the first time the plugin is downloaded - leave it empty. DO NOT REPLACE OR CLEAR IT " +
+                "once plugins are installed: every installed plugin trusts the key it was downloaded with and will " +
+                "refuse anything signed by another. Encrypted at rest.",
+            valueType: PlatformSettingValueType.Secret,
+            defaultValue: string.Empty,
             logger: logger);
     }
 

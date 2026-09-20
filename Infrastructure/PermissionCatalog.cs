@@ -43,6 +43,27 @@ public static class PermissionCatalog
     /// </remarks>
     public const string ServerSendCommand = "RustServer.SendCommand";
 
+    /// <summary>
+    /// Seeing where a server's players' bases are (tool cupboards, their owners, who is authorized on them), from the
+    /// RustArchon plugin.
+    /// </summary>
+    /// <remarks>
+    /// Its own permission, not folded into <see cref="ServerGet"/>: it is the most sensitive thing the plugin reports,
+    /// and a moderator who may look at a server must not thereby be able to find every base on it. The Owner holds it;
+    /// an Owner can delegate it to a role on a plan that has roles (Scott, 2026-09-19).
+    /// </remarks>
+    public const string ServerViewBases = "RustServer.ViewBases";
+
+    /// <summary>
+    /// Seeing where players are and where they have been, from the positions the RustArchon plugin records.
+    /// </summary>
+    /// <remarks>
+    /// Its own permission for the same reason as <see cref="ServerViewBases"/>: it is the most sensitive thing the plugin reports
+    /// (a player's live location), so a moderator who may look at a server must not thereby be able to follow players around it.
+    /// The Owner holds it; an Owner can delegate it to a role on a plan that has roles, with no delay (Scott, 2026-09-19).
+    /// </remarks>
+    public const string ServerViewPositions = "RustServer.ViewPositions";
+
     /// <summary>Reading the Organization's own plan, invoices and billing history.</summary>
     public const string SubscriptionView = "Subscription.View";
 
@@ -119,7 +140,7 @@ public static class PermissionCatalog
     /// </summary>
     public static readonly string[] OwnerPermissions =
     [
-        ServerGet, ServerList, ServerCreate, ServerUpdate, ServerDelete, ServerSendCommand,
+        ServerGet, ServerList, ServerCreate, ServerUpdate, ServerDelete, ServerSendCommand, ServerViewBases, ServerViewPositions,
         SubscriptionView, SubscriptionManage,
         OrganizationManageMembers, OrganizationManageRoles, OrganizationManageSettings,
         OrganizationSubmitTickets
@@ -154,6 +175,11 @@ public static class PermissionCatalog
             "Remove a server and its history."),
         new(ServerSendCommand, PermissionScope.Tenant, "Servers", DelegableByTenantAdmin: true,
             "Run any RCON command on a server."),
+
+        new(ServerViewBases, PermissionScope.Tenant, "Servers", DelegableByTenantAdmin: true,
+            "See where players' bases are, and who is authorized on them. Owner by default."),
+        new(ServerViewPositions, PermissionScope.Tenant, "Servers", DelegableByTenantAdmin: true,
+            "See where players are and where they have been. Owner by default."),
 
         new(SubscriptionView, PermissionScope.Tenant, "Billing", DelegableByTenantAdmin: true,
             "See the organization's plan, invoices and billing history."),

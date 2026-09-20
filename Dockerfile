@@ -27,6 +27,8 @@ COPY ["RustArchon.Api/", "RustArchon.Api/"]
 COPY ["RustArchon.Shared/", "RustArchon.Shared/"]
 COPY ["RustArchon.Messaging/", "RustArchon.Messaging/"]
 COPY ["JumpStart/", "JumpStart/"]
+# Embedded into the Api (see RustArchon.Api.csproj): the plugin script this Panel signs and serves.
+COPY ["RustArchon.Plugin/", "RustArchon.Plugin/"]
 WORKDIR "/src/RustArchon.Api"
 RUN dotnet build "RustArchon.Api.csproj" -c $BUILD_CONFIGURATION -o /app/build --no-restore
 

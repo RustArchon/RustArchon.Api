@@ -138,4 +138,28 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// <see cref="Infrastructure.Security.IApiKeyProtector.Protect"/> - never store plaintext here.
     /// </summary>
     public string? GeolocationApiKey { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether the optional RustArchon companion plugin should record player positions and
+    /// events on this server. On by default with an opt-out (Scott, 2026-09-19). This is the <em>desired</em>
+    /// state: the Api pushes it to the plugin whenever the plugin's reported state differs (see
+    /// <see cref="ServerPluginStatus"/> and <c>PluginSettingsSynchronizer</c>). Has no effect on a server
+    /// without the plugin.
+    /// </summary>
+    public bool PluginRecordingEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether the optional RustArchon companion plugin should track combat (damage) on this
+    /// server. On by default; a separate switch so the highest-volume hook can be turned off from the Panel
+    /// if it ever proves costly. Desired state, reconciled like <see cref="PluginRecordingEnabled"/>.
+    /// </summary>
+    public bool PluginCombatLogEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether an admin may update the RustArchon plugin on this server from the Panel. <b>Off by
+    /// default</b> (unlike the two switches above): an update replaces code running with full server privileges, so it
+    /// is opt-in per server. Even when on, nothing updates by itself; an admin has to press Update, which mints a
+    /// single-use token and tells the Updater plugin to fetch and verify the new version.
+    /// </summary>
+    public bool PluginUpdatesEnabled { get; set; }
 }

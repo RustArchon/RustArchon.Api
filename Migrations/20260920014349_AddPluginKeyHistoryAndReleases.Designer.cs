@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260920014349_AddPluginKeyHistoryAndReleases")]
+    partial class AddPluginKeyHistoryAndReleases
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1926,67 +1929,6 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("PluginAdminEvent");
                 });
 
-            modelBuilder.Entity("RustArchon.Api.Data.PluginCombatChunk", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("BootId")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<byte[]>("Data")
-                        .IsRequired()
-                        .HasColumnType("bytea");
-
-                    b.Property<int>("EventCount")
-                        .HasColumnType("integer");
-
-                    b.Property<long>("FirstSequence")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("Format")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("FromUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("LastSequence")
-                        .HasColumnType("bigint");
-
-                    b.PrimitiveCollection<string[]>("PlayerIds")
-                        .IsRequired()
-                        .HasColumnType("text[]");
-
-                    b.Property<bool>("PrecededByGap")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("RustServerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("ToUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex(new[] { "RustServerId", "BootId", "FirstSequence" }, "IX_PluginCombatChunk_Server_Boot_FirstSequence")
-                        .IsUnique();
-
-                    b.HasIndex(new[] { "RustServerId", "ToUtc" }, "IX_PluginCombatChunk_Server_ToUtc");
-
-                    b.HasIndex(new[] { "ToUtc" }, "IX_PluginCombatChunk_ToUtc");
-
-                    b.ToTable("PluginCombatChunk");
-                });
-
             modelBuilder.Entity("RustArchon.Api.Data.PluginKeyHistory", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2032,181 +1974,6 @@ namespace RustArchon.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("PluginKeyHistory");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginMap", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("ExistsOnServer")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<DateTimeOffset>("LastSeenUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("MonumentsJson")
-                        .HasColumnType("text");
-
-                    b.Property<string>("ObjectKey")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<long?>("PreviewBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("PreviewObjectKey")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("PreviewSha256")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<Guid>("RustServerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("ServerBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Sha256")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("UploadRequestedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("UploadedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long?>("UploadedBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<long>("WorldSeed")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("WorldSize")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex(new[] { "RustServerId", "WorldSize", "WorldSeed" }, "IX_PluginMap_Server_World")
-                        .IsUnique();
-
-                    b.ToTable("PluginMap");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginMapUploadToken", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("ExpiresAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("PluginMapId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset?>("RedeemedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("RustServerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex(new[] { "ExpiresAtUtc" }, "IX_PluginMapUploadToken_ExpiresAtUtc");
-
-                    b.HasIndex(new[] { "TokenHash" }, "IX_PluginMapUploadToken_TokenHash")
-                        .IsUnique();
-
-                    b.ToTable("PluginMapUploadToken");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginPositionChunk", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("BootId")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<byte[]>("Data")
-                        .IsRequired()
-                        .HasColumnType("bytea");
-
-                    b.Property<long>("FirstSequence")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("Format")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTimeOffset>("FromUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long>("LastSequence")
-                        .HasColumnType("bigint");
-
-                    b.PrimitiveCollection<string[]>("PlayerIds")
-                        .IsRequired()
-                        .HasColumnType("text[]");
-
-                    b.Property<bool>("PrecededByGap")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("RustServerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("SampleCount")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("ToUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex(new[] { "RustServerId", "BootId", "FirstSequence" }, "IX_PluginPositionChunk_Server_Boot_FirstSequence")
-                        .IsUnique();
-
-                    b.HasIndex(new[] { "RustServerId", "ToUtc" }, "IX_PluginPositionChunk_Server_ToUtc");
-
-                    b.HasIndex(new[] { "ToUtc" }, "IX_PluginPositionChunk_ToUtc");
-
-                    b.ToTable("PluginPositionChunk");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.PluginRelease", b =>
@@ -2271,44 +2038,6 @@ namespace RustArchon.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("PluginRelease");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginTcSnapshot", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CapturedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Count")
-                        .HasColumnType("integer");
-
-                    b.Property<byte[]>("Data")
-                        .IsRequired()
-                        .HasColumnType("bytea");
-
-                    b.Property<int>("Format")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("Ready")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("RustServerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex(new[] { "RustServerId" }, "IX_PluginTcSnapshot_RustServerId")
-                        .IsUnique();
-
-                    b.ToTable("PluginTcSnapshot");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateToken", b =>
@@ -3531,61 +3260,6 @@ namespace RustArchon.Api.Migrations
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.PlayerSession", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginCombatChunk", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginMap", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginMapUploadToken", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginPositionChunk", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginTcSnapshot", b =>
                 {
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
                         .WithMany()

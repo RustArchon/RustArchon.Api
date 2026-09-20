@@ -176,6 +176,23 @@ builder.Services.AddScoped<IGeolocationService, GeolocationService>();
 builder.Services.AddHttpClient<ISteamApiClient, SteamApiClient>();
 builder.Services.AddScoped<IApiKeyProtector, ApiKeyProtector>();
 
+// Brings a server's RustArchon plugin switches (Recording, Combat log) in line with the saved settings - see
+// PluginSettingsSynchronizer. Scoped: it depends on scoped repositories and the request client.
+builder.Services.AddScoped<IPluginSettingsSynchronizer, PluginSettingsSynchronizer>();
+
+// The signed RustArchon plugin script this Panel serves - see PluginScriptService/PluginSigningService. Scoped: the
+// signing service reads the encrypted key through a scoped repository.
+builder.Services.AddSingleton<EmbeddedPluginScriptSource>();
+builder.Services.AddScoped<IPluginScriptSource, PublishedPluginScriptSource>();
+builder.Services.AddScoped<IPluginReleaseService, PluginReleaseService>();
+builder.Services.AddScoped<IPluginSigningService, PluginSigningService>();
+builder.Services.AddScoped<IPluginScriptService, PluginScriptService>();
+builder.Services.AddScoped<IPluginUpdateService, PluginUpdateService>();
+builder.Services.AddScoped<IPluginMapUploadRequester, PluginMapUploadRequester>();
+builder.Services.AddSingleton<IMapPreviewRenderer, MapPreviewRenderer>();
+builder.Services.AddScoped<IMapPreviewService, MapPreviewService>();
+builder.Services.AddScoped<IPluginKeyService, PluginKeyService>();
+
 // ============================================
 // 4c. MESSAGING (RABBITMQ)
 // ============================================
@@ -200,6 +217,12 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<PlayerSessionSnapshotUpdatedConsumer>();
     x.AddConsumer<ServerInfoSnapshotCapturedConsumer>();
     x.AddConsumer<ServerPluginsCapturedConsumer>();
+    x.AddConsumer<ServerPluginHandshakeCapturedConsumer>();
+    x.AddConsumer<PluginCombatEventsCapturedConsumer>();
+    x.AddConsumer<PluginTcSnapshotCapturedConsumer>();
+    x.AddConsumer<PluginPositionsCapturedConsumer>();
+    x.AddConsumer<PluginMapStatusCapturedConsumer>();
+    x.AddConsumer<ServerPluginSettingsChangedConsumer>();
     x.AddConsumer<WorkerDiagnosticLoggedConsumer>();
     x.AddConsumer<CommunicationDeliveredConsumer>();
 
@@ -232,6 +255,8 @@ builder.Services.AddMassTransit(x =>
 });
 
 builder.Services.AddHostedService<ServerClaimSweepService>();
+builder.Services.AddScoped<IPluginDataRetention, PluginDataRetention>();
+builder.Services.AddHostedService<PluginDataPruneService>();
 builder.Services.AddSignalR();
 
 // ============================================
@@ -373,6 +398,11 @@ builder.Services.AddScoped<IOrganizationProvisioningService, OrganizationProvisi
 // the framework because who qualifies is RustArchon's question, not JumpStart's. Every grant is
 // logged. See SiteAdminCrossTenantPolicy.
 builder.Services.AddScoped<JumpStart.Authorization.ICrossTenantAccessPolicy, SiteAdminCrossTenantPolicy>();
+
+// "A site admin can do everything": passes every permission-gated endpoint for someone holding
+// Platform.ManageOrganizations, including in an organization where they are a member with a lesser role.
+// Stands beside JumpStart's EntityPermissionHandler (any handler succeeding passes the requirement).
+builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, SiteAdminAuthorizationHandler>();
 
 // Collapsing an Organization onto the built-in Owner role when it downgrades to a plan without role
 // separation. Driven by SubscriptionScheduleService when the deferred change lands, weeks after the
