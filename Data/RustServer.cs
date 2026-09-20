@@ -149,6 +149,13 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     public bool PluginRecordingEnabled { get; set; } = true;
 
     /// <summary>
+    /// When the person adding this server got to the end of the Add Server wizard; <c>null</c> until then. A server that was already there when this
+    /// was added counts as complete from its creation date. It is what the servers list keys "Finish setup" on, so a half-added server is offered
+    /// its way back and a finished one (even one that is offline for a while) is not.
+    /// </summary>
+    public DateTimeOffset? SetupCompletedAtUtc { get; set; }
+
+    /// <summary>
     /// Gets or sets whether the optional RustArchon companion plugin should track combat (damage) on this
     /// server. On by default; a separate switch so the highest-volume hook can be turned off from the Panel
     /// if it ever proves costly. Desired state, reconciled like <see cref="PluginRecordingEnabled"/>.

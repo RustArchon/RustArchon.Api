@@ -74,6 +74,10 @@ public class RustServerMappingProfile
         updateMap.ForMember(dest => dest.AssignedWorkerId, opt => opt.Ignore());
         updateMap.ForMember(dest => dest.LastHeartbeatUtc, opt => opt.Ignore());
 
+        // Set only by POST setup-complete, when the wizard is finished; never by a create or an edit.
+        createMap.ForMember(dest => dest.SetupCompletedAtUtc, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.SetupCompletedAtUtc, opt => opt.Ignore());
+
         // The RustArchon-plugin switches are NOT on the create/update DTOs, on purpose: Update is a full-record
         // PUT, and carrying them would let an ordinary edit from a client that does not send them silently reset a
         // switch someone turned off. They are changed only through PUT plugin-settings (see UpdatePluginSettings),

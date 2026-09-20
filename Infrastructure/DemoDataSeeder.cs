@@ -464,6 +464,7 @@ public static class DemoDataSeeder
                 ConnectionStatus = RconConnectionStatus.Disconnected,
                 ConnectionStatusDetail = "Demo data - this host does not exist.",
                 ConnectionStatusChangedAtUtc = now,
+                SetupCompletedAtUtc = now,
                 CreatedById = MarkerId,
                 CreatedOn = now
             });
