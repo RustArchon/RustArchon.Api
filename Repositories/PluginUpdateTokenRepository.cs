@@ -17,7 +17,7 @@ namespace RustArchon.Api.Repositories;
 /// The key the server's installed plugin trusts (as reported when the token was minted): the download is signed with
 /// it, as a bridge to the active key when they differ.
 /// </param>
-public sealed record PluginTokenRedemption(string SigningKeyFingerprint);
+public sealed record PluginTokenRedemption(string SigningKeyFingerprint, Guid RustServerId = default);
 
 /// <summary>Mints and redeems the single-use tokens a plugin update hands the game server.</summary>
 public interface IPluginUpdateTokenRepository : IRepository<PluginUpdateToken>
@@ -32,6 +32,12 @@ public interface IPluginUpdateTokenRepository : IRepository<PluginUpdateToken>
     /// else (unknown, wrong server, already used, expired) is a plain <c>null</c> that says nothing about which.
     /// </summary>
     Task<PluginTokenRedemption?> RedeemAsync(Guid rustServerId, string rawToken);
+
+    /// <summary>
+    /// Uses a token that arrived without a server named (in a header, from Updater 0.3.0): the token itself says which server it was
+    /// minted for. Exactly once, before it expires; anything else is a plain <c>null</c>.
+    /// </summary>
+    Task<PluginTokenRedemption?> RedeemAsync(string rawToken);
 
     /// <summary>Discards a token that was minted but not used (the plugin refused the request).</summary>
     Task RevokeAsync(string rawToken);
@@ -79,7 +85,12 @@ public class PluginUpdateTokenRepository(ApiDbContext context, TimeProvider cloc
         return raw;
     }
 
-    public async Task<PluginTokenRedemption?> RedeemAsync(Guid rustServerId, string rawToken)
+    public Task<PluginTokenRedemption?> RedeemAsync(Guid rustServerId, string rawToken) => RedeemCoreAsync(rustServerId, rawToken);
+
+    public Task<PluginTokenRedemption?> RedeemAsync(string rawToken) => RedeemCoreAsync(null, rawToken);
+
+    // rustServerId is null when the caller does not name a server: the token alone then identifies it.
+    private async Task<PluginTokenRedemption?> RedeemCoreAsync(Guid? rustServerId, string rawToken)
     {
         if (string.IsNullOrEmpty(rawToken))
         {
@@ -91,7 +102,7 @@ public class PluginUpdateTokenRepository(ApiDbContext context, TimeProvider cloc
 
         // One statement, so of any number of simultaneous requests carrying this token exactly one changes a row.
         var changed = await _dbSet.AcrossAllTenants()
-            .Where(t => t.TokenHash == hash && t.RustServerId == rustServerId && t.RedeemedAtUtc == null && t.ExpiresAtUtc > now)
+            .Where(t => t.TokenHash == hash && (rustServerId == null || t.RustServerId == rustServerId) && t.RedeemedAtUtc == null && t.ExpiresAtUtc > now)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.RedeemedAtUtc, now));
 
         if (changed != 1)
@@ -100,12 +111,12 @@ public class PluginUpdateTokenRepository(ApiDbContext context, TimeProvider cloc
         }
 
         // The row is ours now (redeemed, so nobody else can), and its fingerprint never changes: read it back.
-        var fingerprint = await _dbSet.AcrossAllTenants().AsNoTracking()
-            .Where(t => t.TokenHash == hash && t.RustServerId == rustServerId)
-            .Select(t => t.SigningKeyFingerprint)
+        var row = await _dbSet.AcrossAllTenants().AsNoTracking()
+            .Where(t => t.TokenHash == hash && (rustServerId == null || t.RustServerId == rustServerId))
+            .Select(t => new { t.SigningKeyFingerprint, t.RustServerId })
             .FirstOrDefaultAsync();
 
-        return string.IsNullOrEmpty(fingerprint) ? null : new PluginTokenRedemption(fingerprint);
+        return row is null || string.IsNullOrEmpty(row.SigningKeyFingerprint) ? null : new PluginTokenRedemption(row.SigningKeyFingerprint, row.RustServerId);
     }
 
     public async Task RevokeAsync(string rawToken)

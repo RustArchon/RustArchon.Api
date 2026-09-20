@@ -56,6 +56,12 @@ public class PluginUpdateService(
     /// <summary>The first Updater that anchors trust to the installed plugin and accepts a key bridge.</summary>
     public const string MinimumUpdaterVersionForBridge = "0.2.0";
 
+    /// <summary>
+    /// The first Updater that takes the download token as a separate argument and sends it in a header. An older one is given the
+    /// token inside the address, as it always was.
+    /// </summary>
+    public const string MinimumUpdaterVersionForHeaderToken = "0.3.0";
+
     public async Task<PluginUpdateResultDto> StartAsync(RustServer server)
     {
         if (!server.IsEnabled)
@@ -130,12 +136,15 @@ public class PluginUpdateService(
 
         // The token remembers which key the server trusts, so what it downloads is signed with that one.
         var token = await tokens.MintAsync(server.TenantId, server.Id, status.SigningKeyFingerprint.ToLowerInvariant(), TokenLifetime);
-        var url = $"{panelUri.GetLeftPart(UriPartial.Authority)}{panelUri.AbsolutePath.TrimEnd('/')}/ingest/plugin/{server.Id}/{token}";
+        var panelBase = $"{panelUri.GetLeftPart(UriPartial.Authority)}{panelUri.AbsolutePath.TrimEnd('/')}";
+        var updateCommand = PluginVersions.IsAtLeast(updater.Version?.TrimStart('v', 'V'), MinimumUpdaterVersionForHeaderToken)
+            ? $"archon.update {latest} {panelBase}/ingest/plugin {token}"
+            : $"archon.update {latest} {panelBase}/ingest/plugin/{server.Id}/{token}";
 
         try
         {
             var response = await sendCommandClient.GetResponse<RconCommandResult>(
-                new SendRconCommand(server.Id, $"archon.update {latest} {url}", Interactive: false),
+                new SendRconCommand(server.Id, updateCommand, Interactive: false),
                 timeout: RequestTimeout.After(s: 10));
 
             if (!response.Message.Success)
