@@ -36,6 +36,12 @@ public sealed record PluginReleaseInfo(
     string? Notes,
     bool IsServed);
 
+/// <summary>An uploaded file that passed every check: the normalized text (what would be signed), its version and its checksum.</summary>
+public sealed record PluginValidatedSource(string Text, string Version, string Sha256);
+
+/// <summary>A stored release's source, fetched to be signed for a test install. Never shown, only signed.</summary>
+public sealed record PluginStoredSource(Guid Id, PluginReleaseKind Kind, string Version, PluginReleaseState State, string Text);
+
 /// <summary>Which source the Panel serves for one plugin file, and where it came from.</summary>
 public sealed record PluginServedSource(string Text, string? Version, bool FromRelease, Guid? ReleaseId);
 
@@ -50,6 +56,17 @@ public interface IPluginReleaseService
     /// </summary>
     /// <exception cref="PluginReleaseException">See <see cref="PluginReleaseService"/> for the codes.</exception>
     Task<PluginReleaseInfo> UploadAsync(PluginReleaseKind kind, byte[] content, string actor, string? notes);
+
+    /// <summary>
+    /// Runs every check an upload runs (see <see cref="PluginReleaseService"/> for the codes) except "this version was already uploaded", and
+    /// stores nothing. What signing a one-off file uses, so a file signed by hand is held to exactly what a published release is.
+    /// </summary>
+    /// <exception cref="PluginReleaseException">See <see cref="PluginReleaseService"/> for the codes.</exception>
+    PluginValidatedSource Validate(PluginReleaseKind kind, byte[] content);
+
+    /// <summary>A draft's or published release's source, to be signed for a test install. A withdrawn one is refused.</summary>
+    /// <exception cref="PluginReleaseException"><c>not_found</c>, <c>withdrawn</c>.</exception>
+    Task<PluginStoredSource> GetSourceAsync(Guid id);
 
     /// <summary>Makes a draft eligible to be served (the highest published version of a kind is what is offered).</summary>
     Task<PluginReleaseInfo> PublishAsync(Guid id, string actor);
@@ -76,6 +93,7 @@ public interface IPluginReleaseService
 /// <c>wrong_plugin</c> (the <c>[Info]</c> title is not the expected one for the chosen kind), <c>no_version</c>,
 /// <c>bad_placeholders</c> (the two key placeholders must each appear exactly once), <c>already_signed</c> (the file
 /// already carries a signature line - it must be the raw source, so what was reviewed is what gets signed),
+/// <c>syntax_error</c> (it cannot be read as C# 7.3, the language the game server accepts - see <see cref="PluginSourceSyntax"/>),
 /// <c>version_exists</c>.
 /// </para>
 /// </remarks>
@@ -136,7 +154,7 @@ public partial class PluginReleaseService(
         return new PluginServedSource(embeddedText, embeddedVersion, FromRelease: false, null);
     }
 
-    public async Task<PluginReleaseInfo> UploadAsync(PluginReleaseKind kind, byte[] content, string actor, string? notes)
+    public PluginValidatedSource Validate(PluginReleaseKind kind, byte[] content)
     {
         if (content is null || content.Length == 0)
         {
@@ -194,6 +212,39 @@ public partial class PluginReleaseService(
                 "already_signed",
                 "The file already carries a signature line. Upload the raw source; the Panel signs it itself.");
         }
+
+        // Last, because the earlier refusals are the more useful thing to be told first. A file that cannot be read as C# 7.3 would make
+        // Carbon unload the plugin on every server that took it.
+        var problems = PluginSourceSyntax.Problems(text, out var problemCount);
+        if (problemCount > 0)
+        {
+            throw new PluginReleaseException(
+                "syntax_error",
+                $"The file cannot be compiled as C# 7.3, which is what the game server accepts: {string.Join("; ", problems)}" +
+                (problemCount > problems.Count ? $" (and {problemCount - problems.Count} more)" : "") + ".");
+        }
+
+        return new PluginValidatedSource(text, version, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text))));
+    }
+
+    public async Task<PluginStoredSource> GetSourceAsync(Guid id)
+    {
+        var release = await context.PluginReleases.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id)
+            ?? throw new PluginReleaseException("not_found", "No such release.");
+        if (release.State == PluginReleaseState.Withdrawn)
+        {
+            throw new PluginReleaseException("withdrawn", "A withdrawn release is not signed.");
+        }
+
+        return new PluginStoredSource(release.Id, release.Kind, release.Version, release.State, release.SourceText);
+    }
+
+    public async Task<PluginReleaseInfo> UploadAsync(PluginReleaseKind kind, byte[] content, string actor, string? notes)
+    {
+        var validated = Validate(kind, content);
+        var text = validated.Text;
+        var version = validated.Version;
+        var title = TitleFor(kind);
 
         if (await context.PluginReleases.AnyAsync(r => r.Kind == kind && r.Version == version))
         {

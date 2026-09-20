@@ -15,15 +15,17 @@ namespace RustArchon.Api.Services;
 /// </remarks>
 public interface IReportIngestThrottle
 {
-    /// <summary>Takes one report's worth of budget for <paramref name="serverId"/>. <c>false</c> when it has run out for now.</summary>
-    bool TryAcquire(Guid serverId);
+    /// <summary>
+    /// Takes one report's worth of budget for <paramref name="serverId"/>, which may file <paramref name="perWindow"/> reports per
+    /// <see cref="ReportIngestThrottle.Window"/>. <c>false</c> when it has run out for now. The limit is passed in (it is a Platform
+    /// Setting the caller reads), so a change applies to the very next report.
+    /// </summary>
+    bool TryAcquire(Guid serverId, int perWindow);
 }
 
 /// <inheritdoc />
 public class ReportIngestThrottle(TimeProvider clock) : IReportIngestThrottle
 {
-    /// <summary>Reports accepted per server per window.</summary>
-    public const int PerWindow = 60;
 
     /// <summary>The window's length.</summary>
     public static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
@@ -31,7 +33,7 @@ public class ReportIngestThrottle(TimeProvider clock) : IReportIngestThrottle
     private readonly ConcurrentDictionary<Guid, Bucket> _buckets = new();
 
     /// <inheritdoc />
-    public bool TryAcquire(Guid serverId)
+    public bool TryAcquire(Guid serverId, int perWindow)
     {
         var now = clock.GetUtcNow();
         var bucket = _buckets.GetOrAdd(serverId, _ => new Bucket(now));
@@ -44,7 +46,7 @@ public class ReportIngestThrottle(TimeProvider clock) : IReportIngestThrottle
                 bucket.Count = 0;
             }
 
-            if (bucket.Count >= PerWindow)
+            if (bucket.Count >= perWindow)
             {
                 return false;
             }

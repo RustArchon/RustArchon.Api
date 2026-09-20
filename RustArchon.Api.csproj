@@ -11,6 +11,9 @@
   <ItemGroup>
     <PackageReference Include="AutoMapper" Version="16.2.0" />
     <PackageReference Include="AWSSDK.S3" Version="4.0.103.3" />
+    <!-- Reads (never runs) an uploaded plugin file as C# 7.3 - the language the game server's compiler accepts - so a file that cannot compile is
+         refused at upload, before anyone can publish it. See PluginSourceSyntax. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.12" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />

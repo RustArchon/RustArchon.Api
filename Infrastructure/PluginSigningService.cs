@@ -79,7 +79,8 @@ public class PluginSigningService(
     IPlatformSettingRepository settings,
     IApiKeyProtector protector,
     ILogger<PluginSigningService> logger,
-    IPluginKeyHistoryRepository? history = null) : IPluginSigningService
+    IPluginKeyHistoryRepository? history = null,
+    IPluginAdminAudit? audit = null) : IPluginSigningService
 {
     private const int MinimumKeySizeBits = 2048;
 
@@ -166,7 +167,23 @@ public class PluginSigningService(
 
             if (await settings.SetValueIfEmptyAsync(PlatformSettingsRegistry.PluginSigningKey, stored))
             {
-                logger.LogInformation("Generated this deployment's RustArchon plugin signing key.");
+                var modulus = Convert.ToBase64String(generated.ExportParameters(includePrivateParameters: false).Modulus!);
+                var fingerprint = PluginScriptStamper.Fingerprint(modulus);
+                logger.LogInformation("Generated this deployment's RustArchon plugin signing key {Fingerprint}.", fingerprint);
+
+                // The moment this key began is what the rotation reminder counts from, and the audit log is where "who made a key" is answered.
+                // Never allowed to fail the key's creation: the key is stored and the caller is about to sign with it.
+                if (audit is not null)
+                {
+                    try
+                    {
+                        await audit.RecordAsync(PluginAdminEventKind.KeyGenerated, fingerprint, "system", "The first signing key was generated.");
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "The new signing key {Fingerprint} is stored, but the audit line for it could not be written.", fingerprint);
+                    }
+                }
             }
 
             // Win or lose the race, use what is stored, so every caller signs with the one key.
@@ -258,6 +275,12 @@ public interface IPluginScriptService
     Task<PluginScript> BuildUpdaterAsync();
 
     /// <summary>
+    /// A plugin source the caller already holds (an uploaded file, a stored release), stamped and signed with the active key exactly as a served
+    /// file is. The caller is the one who has checked and audit-logged it; this only signs.
+    /// </summary>
+    Task<PluginScript> SignSourceAsync(string sourceText, PluginReleaseKind kind);
+
+    /// <summary>
     /// The main plugin for a server whose installed plugin trusts the key with this fingerprint. If that is the active
     /// key this is exactly <see cref="BuildAsync"/>. If it is a retired one, the file is a <b>bridge</b>: it embeds the
     /// active key and is signed twice - by the active key over the source (so the new plugin can vouch for itself),
@@ -289,6 +312,9 @@ public partial class PluginScriptService(IPluginSigningService signing, IPluginS
     public async Task<PluginScript> BuildAsync() => await BuildAsync(await source.ReadSourceAsync(), "RustArchon");
 
     public async Task<PluginScript> BuildUpdaterAsync() => await BuildAsync(await source.ReadUpdaterSourceAsync(), "RustArchonUpdater");
+
+    public Task<PluginScript> SignSourceAsync(string sourceText, PluginReleaseKind kind) =>
+        BuildAsync(sourceText, kind == PluginReleaseKind.Main ? "RustArchon" : "RustArchonUpdater");
 
     public Task<PluginKeyState?> GetKeyStateAsync(string fingerprint) => signing.GetKeyStateAsync(fingerprint);
 

@@ -44,6 +44,11 @@ public interface IPluginAutoUpdater
 /// on that server until a different version is served. A server that could not be reached is simply tried again on the next pass. Players being
 /// online is not a reason to wait: a plugin reload is brief and the Worker collects what the plugin holds every 30 seconds.
 /// </para>
+/// <para>
+/// <b>Staged roll-out.</b> A newly served version is not offered to every server at once when the Platform Setting
+/// <see cref="PlatformSettingsRegistry.PluginRolloutHours"/> says so: it becomes eligible on a growing share of them over those hours (see
+/// <see cref="IPluginRollout"/>). Only this automatic path is paced; a person's click is not.
+/// </para>
 /// </remarks>
 public class PluginAutoUpdater(
     ApiDbContext context,
@@ -53,6 +58,7 @@ public class PluginAutoUpdater(
     IPluginUpdateAttemptRepository attempts,
     IPluginUpdateService updates,
     IPlatformSettingsCache settings,
+    IPluginRollout rollout,
     ILogger<PluginAutoUpdater> logger) : IPluginAutoUpdater
 {
     /// <summary>A server whose plugin has not been heard from for this long is not acted on: it is not there to update.</summary>
@@ -82,6 +88,8 @@ public class PluginAutoUpdater(
 
         var latestMain = await script.GetLatestVersionAsync();
         var latestUpdater = await script.GetLatestUpdaterVersionAsync();
+        var mainRollout = latestMain is null ? null : await rollout.BeginAsync(PluginReleaseKind.Main, latestMain, now);
+        var updaterRollout = latestUpdater is null ? null : await rollout.BeginAsync(PluginReleaseKind.Updater, latestUpdater, now);
 
         var started = 0;
         foreach (var server in servers)
@@ -93,7 +101,7 @@ public class PluginAutoUpdater(
 
             try
             {
-                if (await UpdateOneAsync(server, latestMain, latestUpdater, now))
+                if (await UpdateOneAsync(server, latestMain, latestUpdater, mainRollout, updaterRollout, now))
                 {
                     started++;
                 }
@@ -107,7 +115,8 @@ public class PluginAutoUpdater(
         return started;
     }
 
-    private async Task<bool> UpdateOneAsync(RustServer server, string? latestMain, string? latestUpdater, DateTimeOffset now)
+    private async Task<bool> UpdateOneAsync(
+        RustServer server, string? latestMain, string? latestUpdater, PluginRolloutStatus? mainRollout, PluginRolloutStatus? updaterRollout, DateTimeOffset now)
     {
         var status = await statuses.GetForServerAcrossTenantsAsync(server.TenantId, server.Id);
         if (status is null || now - status.CapturedAtUtc > StatusFreshFor)
@@ -154,13 +163,21 @@ public class PluginAutoUpdater(
             : null;
         var capable = status.Capabilities.Contains(RustArchonPlugin.UpdaterUpdateCapability, StringComparer.Ordinal);
 
-        if (keyState == PluginKeyState.Active && capable && updaterNeeded
+        // A version that is not yet this server's turn in its roll-out waits for a later pass; nothing else about it changes.
+        var updaterTurn = updaterRollout is null || PluginRolloutService.Includes(server.Id, PluginReleaseKind.Updater, latestUpdater!, updaterRollout.Fraction);
+        var mainTurn = mainRollout is null || PluginRolloutService.Includes(server.Id, PluginReleaseKind.Main, latestMain!, mainRollout.Fraction);
+        if ((updaterNeeded && !updaterTurn) || (mainNeeded && !mainTurn))
+        {
+            logger.LogDebug("Server {ServerId} is not yet due its turn in the staged roll-out.", server.Id);
+        }
+
+        if (keyState == PluginKeyState.Active && capable && updaterNeeded && updaterTurn
             && !await attempts.HasUnsuccessfulAsync(server.Id, PluginUpdateKinds.Updater, latestUpdater!))
         {
             return await StartAsync(server, PluginUpdateKinds.Updater, latestUpdater!, () => updates.StartUpdaterAsync(server, PluginUpdateTriggers.Auto));
         }
 
-        if (mainNeeded && !await attempts.HasUnsuccessfulAsync(server.Id, PluginUpdateKinds.Main, latestMain!))
+        if (mainNeeded && mainTurn && !await attempts.HasUnsuccessfulAsync(server.Id, PluginUpdateKinds.Main, latestMain!))
         {
             return await StartAsync(server, PluginUpdateKinds.Main, latestMain!, () => updates.StartAsync(server, PluginUpdateTriggers.Auto));
         }

@@ -186,6 +186,8 @@ builder.Services.AddSingleton<EmbeddedPluginScriptSource>();
 builder.Services.AddScoped<IPluginScriptSource, PublishedPluginScriptSource>();
 builder.Services.AddScoped<IPluginReleaseService, PluginReleaseService>();
 builder.Services.AddScoped<IPluginSigningService, PluginSigningService>();
+builder.Services.AddScoped<IPluginAdminAudit, PluginAdminAudit>();
+builder.Services.AddScoped<IPluginRollout, PluginRolloutService>();
 builder.Services.AddScoped<IPluginScriptService, PluginScriptService>();
 builder.Services.AddScoped<IPluginUpdateService, PluginUpdateService>();
 builder.Services.AddScoped<IPluginMapUploadRequester, PluginMapUploadRequester>();
@@ -198,6 +200,7 @@ builder.Services.AddScoped<IMapPreviewService, MapPreviewService>();
 builder.Services.AddScoped<IReportForwardingService, ReportForwardingService>();
 builder.Services.AddScoped<IReportIngestService, ReportIngestService>();
 builder.Services.AddSingleton<IReportIngestThrottle, ReportIngestThrottle>();
+builder.Services.AddSingleton<IntegrationCheckLimit>();
 
 // Checks an admin-typed third-party key with its provider before it is saved (the wizard's and the edit form's Verify buttons).
 // RemoveAllLoggers: Steam only accepts its key in the address, and the default HTTP logging would write every address, key
@@ -570,18 +573,23 @@ builder.Services.AddRateLimiter(options =>
 
     // Guards IntegrationVerificationController: an authenticated caller can make this Api call a third-party provider on their
     // behalf, so it is limited per caller (the signed-in user, falling back to the address) to keep it from being a free
-    // key-testing service. 20 checks a minute is far more than a person clicking Verify.
+    // key-testing service. The limit is a Platform Setting (IntegrationChecksPerUserPerMinute, 20 by default - far more than a person
+    // clicking Verify). A limiter cannot wait for a database read, so it reads the last value seen (refreshed in the background), and
+    // the value is part of the partition key so a changed limit starts fresh windows instead of being ignored by the old ones.
     options.AddPolicy(RustArchon.Api.Controllers.IntegrationVerificationController.RateLimitPolicy, httpContext =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: httpContext.User.Identity?.Name
+    {
+        var perMinute = httpContext.RequestServices.GetRequiredService<IntegrationCheckLimit>().Value;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: (httpContext.User.Identity?.Name
                 ?? httpContext.Connection.RemoteIpAddress?.ToString()
-                ?? "unknown",
+                ?? "unknown") + "|" + perMinute,
             factory: _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = 20,
+                PermitLimit = perMinute,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0
-            }));
+            });
+    });
 });
 
 // ============================================

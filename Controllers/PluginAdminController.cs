@@ -33,8 +33,15 @@ namespace RustArchon.Api.Controllers;
 public class PluginAdminController(
     IPluginKeyService keys,
     IPluginReleaseService releases,
-    ApiDbContext context) : ControllerBase
+    ApiDbContext context,
+    IPluginScriptService scripts,
+    IPluginAdminAudit audit,
+    IPluginRollout rollout,
+    TimeProvider clock) : ControllerBase
 {
+    /// <summary>The shortest reason accepted for signing a one-off file. The audit line is only worth something if it says why.</summary>
+    public const int MinSigningNoteLength = 3;
+
     private string Actor =>
         User.FindFirstValue(ClaimTypes.Email) ?? User.FindFirstValue("email") ?? User.Identity?.Name ?? "unknown";
 
@@ -43,6 +50,24 @@ public class PluginAdminController(
     [HttpGet("keys")]
     public async Task<ActionResult<List<PluginKeyDto>>> ListKeys() =>
         Ok((await keys.ListAsync()).Select(ToDto).ToList());
+
+    /// <summary>
+    /// Whether the active key has gone long enough without being rotated that a reminder should be shown. Read by the banner every site
+    /// administrator sees; never changes anything.
+    /// </summary>
+    [HttpGet("keys/reminder")]
+    public async Task<ActionResult<PluginKeyReminderDto>> KeyReminder()
+    {
+        var reminder = await keys.GetReminderAsync();
+        return Ok(new PluginKeyReminderDto
+        {
+            Due = reminder.Due,
+            Fingerprint = reminder.Fingerprint,
+            ActiveSinceUtc = reminder.ActiveSinceUtc,
+            AgeDays = reminder.AgeDays,
+            ReminderDays = reminder.ReminderDays
+        });
+    }
 
     [HttpPost("keys/rotate")]
     public async Task<ActionResult<PluginKeyDto>> Rotate([FromBody] RotatePluginKeyRequestDto request)
@@ -176,6 +201,89 @@ public class PluginAdminController(
         }
     }
 
+    /// <summary>
+    /// Signs a file that is not going to be published: multipart <c>kind</c>, <c>file</c> and a required <c>note</c> saying why. It is held to every
+    /// check an upload is, signed with the active key exactly as a served file is, returned as the download, and recorded in the audit log with
+    /// who asked, what (checksum, version) and why. Nothing is stored and nothing is delivered to any server: this is how a self-hoster gets a
+    /// custom build they can install by hand on a server that trusts this Panel.
+    /// </summary>
+    [HttpPost("sign")]
+    [RequestSizeLimit(PluginReleaseService.MaxBytes + 4096)]
+    public async Task<IActionResult> SignFile([FromForm] string kind, [FromForm] string? note, IFormFile file)
+    {
+        if (!TryParseKind(kind, out var releaseKind))
+        {
+            return BadRequest("Kind must be 'main' or 'updater'.");
+        }
+
+        if (file is null || file.Length == 0)
+        {
+            return BadRequest("Choose a file to sign.");
+        }
+
+        if (file.Length > PluginReleaseService.MaxBytes)
+        {
+            return BadRequest($"The file is over {PluginReleaseService.MaxBytes / 1024} KiB.");
+        }
+
+        var reason = note?.Trim();
+        if (string.IsNullOrEmpty(reason) || reason.Length < MinSigningNoteLength)
+        {
+            return BadRequest("Say why this file is being signed. The audit log records it.");
+        }
+
+        using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer);
+
+        PluginValidatedSource validated;
+        try
+        {
+            validated = releases.Validate(releaseKind, buffer.ToArray());
+        }
+        catch (PluginReleaseException ex)
+        {
+            return Refused(ex.Code, ex.Message);
+        }
+
+        var script = await scripts.SignSourceAsync(validated.Text, releaseKind);
+        await audit.RecordAsync(
+            PluginAdminEventKind.FileSigned, $"{releaseKind} {validated.Version}", Actor,
+            $"sha256 {validated.Sha256[..12]}, key {script.KeyFingerprint}: {reason}");
+
+        Response.Headers.CacheControl = "no-store";
+        return File(script.Bytes, "text/plain", SignedFileName(releaseKind));
+    }
+
+    /// <summary>
+    /// A stored draft's or published release signed with the active key, as the download: what to hand-install on a test server before publishing
+    /// it (or on one that is not to be updated from here). Audit-logged with who asked. A withdrawn release is refused.
+    /// </summary>
+    [HttpGet("releases/{id:guid}/download")]
+    public async Task<IActionResult> DownloadRelease(Guid id)
+    {
+        PluginStoredSource stored;
+        try
+        {
+            stored = await releases.GetSourceAsync(id);
+        }
+        catch (PluginReleaseException ex) when (ex.Code == "not_found")
+        {
+            return NotFound();
+        }
+        catch (PluginReleaseException ex)
+        {
+            return Refused(ex.Code, ex.Message);
+        }
+
+        var script = await scripts.SignSourceAsync(stored.Text, stored.Kind);
+        await audit.RecordAsync(
+            PluginAdminEventKind.ReleaseSigned, $"{stored.Kind} {stored.Version}", Actor,
+            $"{stored.State.ToString().ToLowerInvariant()} release downloaded, key {script.KeyFingerprint}");
+
+        Response.Headers.CacheControl = "no-store";
+        return File(script.Bytes, "text/plain", SignedFileName(stored.Kind));
+    }
+
     [HttpPost("releases/{id:guid}/publish")]
     public async Task<ActionResult<PluginReleaseDto>> Publish(Guid id)
     {
@@ -231,12 +339,16 @@ public class PluginAdminController(
     private async Task<PluginServedDto> ServedAsync(PluginReleaseKind kind)
     {
         var served = await releases.ResolveAsync(kind);
+        var progress = served.Version is null ? null : await rollout.PeekAsync(kind, served.Version, clock.GetUtcNow());
         return new PluginServedDto
         {
             Kind = KindName(kind),
             ServedVersion = served.Version,
             EmbeddedVersion = releases.EmbeddedVersion(kind),
-            FromRelease = served.FromRelease
+            FromRelease = served.FromRelease,
+            RolloutStartedUtc = progress?.StartedAtUtc,
+            RolloutHours = progress?.Hours ?? 0,
+            RolloutPercent = progress is null ? null : (int)Math.Floor(progress.Fraction * 100)
         };
     }
 
@@ -252,6 +364,8 @@ public class PluginAdminController(
 
     private static string KindName(PluginReleaseKind kind) => kind == PluginReleaseKind.Main ? "main" : "updater";
 
+    private static string SignedFileName(PluginReleaseKind kind) => kind == PluginReleaseKind.Main ? "RustArchon.cs" : "RustArchonUpdater.cs";
+
     private static PluginKeyDto ToDto(PluginKeyInfo k) => new()
     {
         Fingerprint = k.Fingerprint,
@@ -260,7 +374,8 @@ public class PluginAdminController(
         RevokedAtUtc = k.RevokedAtUtc,
         RevokedReason = k.RevokedReason,
         ServersReporting = k.ServersReporting,
-        LastReportedUtc = k.LastReportedUtc
+        LastReportedUtc = k.LastReportedUtc,
+        ActiveSinceUtc = k.ActiveSinceUtc
     };
 
     private static PluginReleaseDto ToDto(PluginReleaseInfo r) => new()

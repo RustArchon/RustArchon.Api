@@ -48,6 +48,7 @@ public static class PlatformSettingsRegistry
         public const string Email = "Email";
         public const string Ticketing = "Ticketing";
         public const string Plugin = "Plugin";
+        public const string Reports = "Reports";
     }
 
     /// <summary>
@@ -317,6 +318,51 @@ public static class PlatformSettingsRegistry
     /// automatic update at once (a person can still press the buttons) - the emergency stop for a release that turns out to be bad.
     /// </summary>
     public const string PluginAutoUpdatesEnabled = "PluginAutoUpdatesEnabled";
+
+    /// <summary>
+    /// How many hours a new plugin or Updater version takes to become eligible for automatic installation on every server (a straight-line ramp: half
+    /// the servers after half the time). Zero, the default, means everyone at once. A person pressing Update is never held back by it.
+    /// </summary>
+    public const string PluginRolloutHours = "PluginRolloutHours";
+
+    /// <summary>The value <see cref="PluginRolloutHours"/> falls back to when unset or unparseable: no ramp.</summary>
+    public const int DefaultPluginRolloutHours = 0;
+
+    /// <summary>
+    /// How many days the active plugin signing key may go without being rotated before the Panel reminds a site administrator to consider it.
+    /// Zero turns the reminder off.
+    /// </summary>
+    public const string PluginKeyRotationReminderDays = "PluginKeyRotationReminderDays";
+
+    /// <summary>The value <see cref="PluginKeyRotationReminderDays"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultPluginKeyRotationReminderDays = 365;
+
+    /// <summary>
+    /// How many in-game (F7) reports one server may file per minute. Applied only after the server's secret address has been checked, so
+    /// nobody can spend a real server's allowance. Later this may become a per-server setting; for now it is one number for everyone.
+    /// </summary>
+    public const string ReportsPerServerPerMinute = "ReportsPerServerPerMinute";
+
+    /// <summary>The value <see cref="ReportsPerServerPerMinute"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultReportsPerServerPerMinute = 60;
+
+    /// <summary>
+    /// How many report posts one network address may make to the Panel's public report address per minute, secret or no secret. A blunt
+    /// first line of defence that keeps a flood from reaching the Api at all.
+    /// </summary>
+    public const string ReportsPerAddressPerMinute = "ReportsPerAddressPerMinute";
+
+    /// <summary>The value <see cref="ReportsPerAddressPerMinute"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultReportsPerAddressPerMinute = 120;
+
+    /// <summary>
+    /// How many "Verify" checks of a third-party key (geolocation, VPN, Steam) one person may run per minute. Each one makes the Api call the
+    /// provider on their behalf, so the limit keeps the button from being a free key-testing service.
+    /// </summary>
+    public const string IntegrationChecksPerUserPerMinute = "IntegrationChecksPerUserPerMinute";
+
+    /// <summary>The value <see cref="IntegrationChecksPerUserPerMinute"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultIntegrationChecksPerUserPerMinute = 20;
 
     /// <summary>
     /// Encrypted at rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. Shown only while
@@ -725,6 +771,70 @@ public static class PlatformSettingsRegistry
                 "(you can also withdraw the release). Administrators can still update a server by hand.",
             valueType: PlatformSettingValueType.Boolean,
             defaultValue: "true",
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PluginRolloutHours,
+            category: Categories.Plugin,
+            order: 30,
+            displayName: "Plugin roll-out time (hours)",
+            description: "How long a newly published plugin or Updater version takes to reach every server that updates automatically. The servers " +
+                "come in gradually over this time - half of them after half of it - so a version with a problem is noticed on a few servers before " +
+                "it is on all of them (withdraw the release or turn off Automatic plugin updates to stop it). Zero, the default, means every " +
+                "server at once. Someone pressing Update on a server is never held back.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultPluginRolloutHours.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PluginKeyRotationReminderDays,
+            category: Categories.Plugin,
+            order: 40,
+            displayName: "Signing key rotation reminder (days)",
+            description: "After the active plugin signing key has gone this many days without being rotated, site administrators see a reminder to " +
+                "consider rotating it. Rotating is safe (servers on the old key are moved to the new one in a single update) but is never done for you. " +
+                "Zero turns the reminder off.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultPluginKeyRotationReminderDays.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: ReportsPerServerPerMinute,
+            category: Categories.Reports,
+            order: 10,
+            displayName: "Reports per server per minute",
+            description: "How many in-game (F7) reports one game server may file each minute. A real server files a handful at the very most; " +
+                "anything past this is refused until the minute is up. Counted only for servers that present their own secret address.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultReportsPerServerPerMinute.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: ReportsPerAddressPerMinute,
+            category: Categories.Reports,
+            order: 20,
+            displayName: "Report posts per network address per minute",
+            description: "How many posts to the public report address one network address may make each minute, whether or not the secret is " +
+                "right. Keeps a flood from reaching the Api. Several game servers behind one address share this, so keep it comfortably above " +
+                "the per-server limit times the number of servers a host runs. The Panel picks up a change within a minute.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultReportsPerAddressPerMinute.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: IntegrationChecksPerUserPerMinute,
+            category: Categories.Reports,
+            order: 30,
+            displayName: "Key checks per person per minute",
+            description: "How many times one person may press \"Verify\" on a geolocation, VPN or Steam key each minute. Every check makes this " +
+                "platform call the provider on their behalf. A person clicking a button never gets near the default; it is a guard against a script.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultIntegrationChecksPerUserPerMinute.ToString(),
             logger: logger);
     }
 
