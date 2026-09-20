@@ -191,6 +191,19 @@ builder.Services.AddScoped<IPluginUpdateService, PluginUpdateService>();
 builder.Services.AddScoped<IPluginMapUploadRequester, PluginMapUploadRequester>();
 builder.Services.AddSingleton<IMapPreviewRenderer, MapPreviewRenderer>();
 builder.Services.AddScoped<IMapPreviewService, MapPreviewService>();
+
+// F7 reports (ADR-0001/0003): the forwarding address and its secret, ingestion of what a game server (or its plugin) sends, and the
+// per-server ceiling on how fast reports are accepted. The throttle is a singleton because its whole point is remembering across
+// requests.
+builder.Services.AddScoped<IReportForwardingService, ReportForwardingService>();
+builder.Services.AddScoped<IReportIngestService, ReportIngestService>();
+builder.Services.AddSingleton<IReportIngestThrottle, ReportIngestThrottle>();
+
+// Checks an admin-typed third-party key with its provider before it is saved (the wizard's and the edit form's Verify buttons).
+// RemoveAllLoggers: Steam only accepts its key in the address, and the default HTTP logging would write every address, key
+// included, to the log.
+builder.Services.AddHttpClient<IIntegrationKeyVerifier, IntegrationKeyVerifier>(client => client.Timeout = TimeSpan.FromSeconds(10))
+    .RemoveAllLoggers();
 builder.Services.AddScoped<IPluginKeyService, PluginKeyService>();
 
 // ============================================
@@ -224,6 +237,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<PluginMapStatusCapturedConsumer>();
     x.AddConsumer<PluginUpdatesCapturedConsumer>();
     x.AddConsumer<ServerPluginSettingsChangedConsumer>();
+    x.AddConsumer<ServerReportCleanupConsumer>();
     x.AddConsumer<WorkerDiagnosticLoggedConsumer>();
     x.AddConsumer<CommunicationDeliveredConsumer>();
 
@@ -549,6 +563,21 @@ builder.Services.AddRateLimiter(options =>
             {
                 PermitLimit = 5,
                 Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0
+            }));
+
+    // Guards IntegrationVerificationController: an authenticated caller can make this Api call a third-party provider on their
+    // behalf, so it is limited per caller (the signed-in user, falling back to the address) to keep it from being a free
+    // key-testing service. 20 checks a minute is far more than a person clicking Verify.
+    options.AddPolicy(RustArchon.Api.Controllers.IntegrationVerificationController.RateLimitPolicy, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.User.Identity?.Name
+                ?? httpContext.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0
             }));
 });

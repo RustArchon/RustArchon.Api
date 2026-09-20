@@ -85,5 +85,13 @@ public class RustServerMappingProfile
         // Same reasoning, and stronger: updates are OFF by default and must only ever be turned on deliberately.
         createMap.ForMember(dest => dest.PluginUpdatesEnabled, opt => opt.Ignore());
         updateMap.ForMember(dest => dest.PluginUpdatesEnabled, opt => opt.Ignore());
+
+        // The report-forwarding secret and its verified-at stamp are never on a create/update DTO and never mapped back out
+        // (ADR-0001): the secret is minted, rotated and read only by ReportForwardingService, behind its own permission, so an
+        // ordinary edit - which a lesser role can make - can neither read nor overwrite it.
+        createMap.ForMember(dest => dest.ReportsSecret, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.ReportForwardingVerifiedAtUtc, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.ReportsSecret, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.ReportForwardingVerifiedAtUtc, opt => opt.Ignore());
     }
 }

@@ -75,6 +75,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<PlayerKillEvent> PlayerKillEvents { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the ServerReport DbSet.
+    /// </summary>
+    public DbSet<ServerReport> ServerReports { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the ServerInfoSnapshot DbSet.
     /// </summary>
     public DbSet<ServerInfoSnapshot> ServerInfoSnapshots { get; set; } = null!;

@@ -162,4 +162,19 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// single-use token and tells the Updater plugin to fetch and verify the new version.
     /// </summary>
     public bool PluginUpdatesEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets the secret in this server's report-forwarding address, encrypted at rest (ADR-0001). <c>null</c> until an
+    /// authorized user first asks for the address - and while it is <c>null</c> the server accepts no reports at all, so an
+    /// existing server is closed until forwarding is deliberately turned on. Independently random per server, never derived from
+    /// anything else, and reversible (not hashed) because the Panel shows the address again on request. Set only via
+    /// <see cref="Infrastructure.Security.IApiKeyProtector.Protect"/>.
+    /// </summary>
+    public string? ReportsSecret { get; set; }
+
+    /// <summary>
+    /// Gets or sets when a check last confirmed the game server's <c>server.reportsServerEndpoint</c> is set to this server's
+    /// current address. Cleared whenever the secret is rotated, since the old address no longer counts.
+    /// </summary>
+    public DateTimeOffset? ReportForwardingVerifiedAtUtc { get; set; }
 }
