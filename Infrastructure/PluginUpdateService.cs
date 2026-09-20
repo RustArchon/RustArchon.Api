@@ -22,11 +22,17 @@ public interface IPluginUpdateService
     /// </summary>
     Task<PluginUpdateResultDto> StartAsync(RustServer server);
 
+    /// <summary>The same, saying who started it (<see cref="PluginUpdateTriggers"/>): a person's click, or the automatic updater.</summary>
+    Task<PluginUpdateResultDto> StartAsync(RustServer server, string trigger);
+
     /// <summary>
     /// The same for the Updater plugin itself, carried out by the main plugin (the Updater cannot replace itself). Installs it when it is
     /// missing. Every precondition is checked first, and a refusal is an ordinary result with a <see cref="PluginUpdateResultDto.Code"/>.
     /// </summary>
     Task<PluginUpdateResultDto> StartUpdaterAsync(RustServer server);
+
+    /// <summary>The same, saying who started it.</summary>
+    Task<PluginUpdateResultDto> StartUpdaterAsync(RustServer server, string trigger);
 }
 
 /// <inheritdoc cref="IPluginUpdateService" />
@@ -52,6 +58,8 @@ public class PluginUpdateService(
     IPluginUpdateTokenRepository tokens,
     IPlatformSettingsCache settings,
     IRequestClient<SendRconCommand> sendCommandClient,
+    IPluginUpdateAttemptRepository attempts,
+    TimeProvider clock,
     ILogger<PluginUpdateService> logger) : IPluginUpdateService
 {
     /// <summary>How long a token stays valid: the Updater downloads within seconds, so this is generous.</summary>
@@ -68,7 +76,17 @@ public class PluginUpdateService(
     /// </summary>
     public const string MinimumUpdaterVersionForHeaderToken = "0.3.0";
 
-    public async Task<PluginUpdateResultDto> StartAsync(RustServer server)
+    /// <summary>
+    /// Codes a plugin can refuse with that say nothing about the version itself (something else is in progress, or the plugin is not the
+    /// one that can do this), so they are not held against it: the same update can be tried again later.
+    /// </summary>
+    private static bool IsTransientRefusal(string code) => code is "busy" or "updater_missing" or "plugin_too_old";
+
+    public Task<PluginUpdateResultDto> StartAsync(RustServer server) => StartAsync(server, PluginUpdateTriggers.Manual);
+
+    public Task<PluginUpdateResultDto> StartUpdaterAsync(RustServer server) => StartUpdaterAsync(server, PluginUpdateTriggers.Manual);
+
+    public async Task<PluginUpdateResultDto> StartAsync(RustServer server, string trigger)
     {
         if (!server.IsEnabled)
         {
@@ -107,7 +125,7 @@ public class PluginUpdateService(
                 status.PluginVersion);
         }
 
-        var installedPlugins = await plugins.GetForServerAsync(server.Id) ?? [];
+        var installedPlugins = await plugins.GetForServerAcrossTenantsAsync(server.TenantId, server.Id) ?? [];
         var updater = installedPlugins.FirstOrDefault(p => string.Equals(p.Name, RustArchonPlugin.UpdaterName, StringComparison.OrdinalIgnoreCase));
         if (updater is null)
         {
@@ -163,11 +181,19 @@ public class PluginUpdateService(
             if (!accepted)
             {
                 await tokens.RevokeAsync(token);
+                if (!IsTransientRefusal(code))
+                {
+                    await attempts.RecordRefusedAsync(
+                        server.TenantId, server.Id, PluginUpdateKinds.Main, status.PluginVersion, latest, trigger, code, clock.GetUtcNow());
+                }
+
                 return Refused(code, message, status.PluginVersion, latest);
             }
 
+            await attempts.RecordStartedAsync(
+                server.TenantId, server.Id, PluginUpdateKinds.Main, status.PluginVersion, latest, trigger, clock.GetUtcNow());
             logger.LogInformation(
-                "Started RustArchon plugin update {From} -> {To} on server {ServerId}.", status.PluginVersion, latest, server.Id);
+                "Started RustArchon plugin update {From} -> {To} on server {ServerId} ({Trigger}).", status.PluginVersion, latest, server.Id, trigger);
             return new PluginUpdateResultDto
             {
                 Started = true,
@@ -184,7 +210,7 @@ public class PluginUpdateService(
         }
     }
 
-    public async Task<PluginUpdateResultDto> StartUpdaterAsync(RustServer server)
+    public async Task<PluginUpdateResultDto> StartUpdaterAsync(RustServer server, string trigger)
     {
         if (!server.IsEnabled)
         {
@@ -231,7 +257,7 @@ public class PluginUpdateService(
                 status.PluginVersion);
         }
 
-        var installedPlugins = await plugins.GetForServerAsync(server.Id) ?? [];
+        var installedPlugins = await plugins.GetForServerAcrossTenantsAsync(server.TenantId, server.Id) ?? [];
         var updater = installedPlugins.FirstOrDefault(p => string.Equals(p.Name, RustArchonPlugin.UpdaterName, StringComparison.OrdinalIgnoreCase));
         var installedVersion = updater?.Version?.TrimStart('v', 'V');
 
@@ -276,12 +302,21 @@ public class PluginUpdateService(
             if (!accepted)
             {
                 await tokens.RevokeAsync(token);
-                return Refused(code == "updater_missing" ? "plugin_too_old" : code, message, installedVersion, latest);
+                var shown = code == "updater_missing" ? "plugin_too_old" : code;
+                if (!IsTransientRefusal(shown))
+                {
+                    await attempts.RecordRefusedAsync(
+                        server.TenantId, server.Id, PluginUpdateKinds.Updater, installedVersion ?? "", latest, trigger, shown, clock.GetUtcNow());
+                }
+
+                return Refused(shown, message, installedVersion, latest);
             }
 
+            await attempts.RecordStartedAsync(
+                server.TenantId, server.Id, PluginUpdateKinds.Updater, installedVersion ?? "", latest, trigger, clock.GetUtcNow());
             logger.LogInformation(
-                "Started RustArchon Updater {Action} {From} -> {To} on server {ServerId}.",
-                updater is null ? "install" : "update", installedVersion ?? "none", latest, server.Id);
+                "Started RustArchon Updater {Action} {From} -> {To} on server {ServerId} ({Trigger}).",
+                updater is null ? "install" : "update", installedVersion ?? "none", latest, server.Id, trigger);
             return new PluginUpdateResultDto
             {
                 Started = true,

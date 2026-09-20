@@ -18,6 +18,12 @@ public interface IServerPluginRepository : JumpStart.Repositories.IRepository<Se
     Task<List<ServerPlugin>> GetForServerAsync(Guid rustServerId);
 
     /// <summary>
+    /// The same list for a server whose organization is stated, not taken from the ambient tenant: what a background job needs, since it has
+    /// none. Only rows of that organization are returned.
+    /// </summary>
+    Task<List<ServerPlugin>> GetForServerAcrossTenantsAsync(Guid tenantId, Guid rustServerId);
+
+    /// <summary>
     /// Makes one server's stored plugin rows match <paramref name="plugins"/> exactly - rows for plugins
     /// no longer present are removed, new ones added, and everything else refreshed - in a single save.
     /// A report captured earlier than what is already stored is ignored, so two messages delivered out of

@@ -272,6 +272,8 @@ builder.Services.AddMassTransit(x =>
 builder.Services.AddHostedService<ServerClaimSweepService>();
 builder.Services.AddScoped<IPluginDataRetention, PluginDataRetention>();
 builder.Services.AddHostedService<PluginDataPruneService>();
+builder.Services.AddScoped<IPluginAutoUpdater, PluginAutoUpdater>();
+builder.Services.AddHostedService<PluginAutoUpdateService>();
 builder.Services.AddSignalR();
 
 // ============================================

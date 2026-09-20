@@ -313,6 +313,12 @@ public static class PlatformSettingsRegistry
     public const string PluginSigningKey = "PluginSigningKey";
 
     /// <summary>
+    /// The site-wide switch for automatic plugin updates. On by default; each server also has to opt in itself. Turning this off stops every
+    /// automatic update at once (a person can still press the buttons) - the emergency stop for a release that turns out to be bad.
+    /// </summary>
+    public const string PluginAutoUpdatesEnabled = "PluginAutoUpdatesEnabled";
+
+    /// <summary>
     /// Encrypted at rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. Shown only while
     /// <see cref="EmailServiceProvider"/> is anything other than <see cref="EmailProviders.Smtp"/>.
     /// </summary>
@@ -706,6 +712,19 @@ public static class PlatformSettingsRegistry
                 "refuse anything signed by another. Encrypted at rest.",
             valueType: PlatformSettingValueType.Secret,
             defaultValue: string.Empty,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PluginAutoUpdatesEnabled,
+            category: Categories.Plugin,
+            order: 20,
+            displayName: "Automatic plugin updates",
+            description: "Lets servers that have turned on \"Update automatically\" receive the plugin and Updater versions this Panel serves without " +
+                "anyone pressing a button. Turn this off to stop every automatic update at once, for example if a release turns out to be bad " +
+                "(you can also withdraw the release). Administrators can still update a server by hand.",
+            valueType: PlatformSettingValueType.Boolean,
+            defaultValue: "true",
             logger: logger);
     }
 

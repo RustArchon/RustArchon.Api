@@ -25,6 +25,13 @@ public class ServerPluginRepository(ApiDbContext context, IUserContext? userCont
             .ToListAsync();
 
     /// <inheritdoc />
+    public Task<List<ServerPlugin>> GetForServerAcrossTenantsAsync(Guid tenantId, Guid rustServerId) =>
+        _dbSet.AcrossAllTenants().AsNoTracking()
+            .Where(p => p.TenantId == tenantId && p.RustServerId == rustServerId)
+            .OrderBy(p => p.Name)
+            .ToListAsync();
+
+    /// <inheritdoc />
     public async Task ReplaceForServerAsync(
         Guid tenantId, Guid rustServerId, IReadOnlyCollection<ServerPlugin> plugins, DateTimeOffset capturedAtUtc)
     {

@@ -879,6 +879,19 @@ public class RustServersController
         entity.PluginRecordingEnabled = settings.RecordingEnabled!.Value;
         entity.PluginCombatLogEnabled = settings.CombatLogEnabled!.Value;
         entity.PluginUpdatesEnabled = settings.UpdatesEnabled!.Value;
+
+        // Automatic updating is only ever a way of pressing the buttons for the administrator, so it cannot outlive the permission to
+        // press them. A missing value leaves it as it was.
+        if (settings.AutoUpdateEnabled is { } auto)
+        {
+            entity.PluginAutoUpdateEnabled = auto;
+        }
+
+        if (!entity.PluginUpdatesEnabled)
+        {
+            entity.PluginAutoUpdateEnabled = false;
+        }
+
         var updated = await _repository.UpdateAsync(entity);
 
         // Only when a switch actually changed, and only for a server a Worker is looking after. The consumer

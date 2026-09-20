@@ -164,6 +164,13 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     public bool PluginUpdatesEnabled { get; set; }
 
     /// <summary>
+    /// Gets or sets whether the Panel updates the plugin and its Updater on this server <b>by itself</b> when a newer version is being
+    /// served (see <c>PluginAutoUpdater</c>). Off by default, and never on while <see cref="PluginUpdatesEnabled"/> is off: it only
+    /// carries out what an administrator could have done by pressing the buttons, so it changes nothing about what is trusted or checked.
+    /// </summary>
+    public bool PluginAutoUpdateEnabled { get; set; }
+
+    /// <summary>
     /// Gets or sets the secret in this server's report-forwarding address, encrypted at rest (ADR-0001). <c>null</c> until an
     /// authorized user first asks for the address - and while it is <c>null</c> the server accepts no reports at all, so an
     /// existing server is closed until forwarding is deliberately turned on. Independently random per server, never derived from

@@ -77,6 +77,7 @@ public class PluginDataRetention(ApiDbContext context, IObjectStorage storage, I
             .Union(await context.ServerInfoSnapshots.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .Union(await context.PluginMaps.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .Union(await context.PluginUpdateNotices.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
+            .Union(await context.PluginUpdateAttempts.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .ToList();
 
         var removed = 0;
@@ -103,6 +104,9 @@ public class PluginDataRetention(ApiDbContext context, IObjectStorage storage, I
             removed += await DeleteOldAsync(
                 context.PluginUpdateNotices.AcrossAllTenants().Where(e => e.TenantId == tenant && e.ReportedAtUtc < cutoff),
                 "plugin update notices", days, tenant);
+            removed += await DeleteOldAsync(
+                context.PluginUpdateAttempts.AcrossAllTenants().Where(e => e.TenantId == tenant && e.State == PluginUpdateAttemptStates.Succeeded && e.StartedAtUtc < cutoff),
+                "succeeded plugin update attempts", days, tenant);
             removed += await PruneMapsAsync(tenant, cutoff, days);
         }
 

@@ -145,6 +145,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<PluginUpdateNotice> PluginUpdateNotices { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the PluginUpdateAttempt DbSet - each time the Panel asked a server to update its plugin or Updater, and how it went.
+    /// </summary>
+    public DbSet<PluginUpdateAttempt> PluginUpdateAttempts { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the Plan DbSet.
     /// </summary>
     public DbSet<Plan> Plans { get; set; } = null!;
