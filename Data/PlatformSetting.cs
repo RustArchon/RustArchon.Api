@@ -167,7 +167,13 @@ public class PlatformSetting : AuditableEntity
     /// (<c>"true"</c>/<c>"false"</c> for <see cref="PlatformSettingValueType.Boolean"/>, the decimal
     /// digits for <see cref="PlatformSettingValueType.Integer"/>) regardless of <see cref="ValueType"/>.
     /// </summary>
+    /// <remarks>
+    /// 8000, not the 1000 every setting fitted in until now: a <see cref="PlatformSettingValueType.Secret"/> is
+    /// stored encrypted, and the encrypted plugin signing key (an RSA-2048 private key, base64 then Data-Protection
+    /// wrapped) is about 2.3 KB. Found on the first real download, when the "value too long" insert failed; a mocked
+    /// repository could never have shown it. Headroom for a 4096-bit key too.
+    /// </remarks>
     [Required]
-    [MaxLength(1000)]
+    [MaxLength(8000)]
     public string Value { get; set; } = string.Empty;
 }

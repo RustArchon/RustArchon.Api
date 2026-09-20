@@ -85,6 +85,56 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<ServerPlugin> ServerPlugins { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the ServerPluginStatus DbSet.
+    /// </summary>
+    public DbSet<ServerPluginStatus> ServerPluginStatuses { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginUpdateToken DbSet.
+    /// </summary>
+    public DbSet<PluginUpdateToken> PluginUpdateTokens { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginKeyHistory DbSet - retired and revoked plugin signing keys.
+    /// </summary>
+    public DbSet<PluginKeyHistory> PluginKeyHistories { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginAdminEvent DbSet - the audit log of plugin key and release actions.
+    /// </summary>
+    public DbSet<PluginAdminEvent> PluginAdminEvents { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginRelease DbSet - plugin source files uploaded for delivery.
+    /// </summary>
+    public DbSet<PluginRelease> PluginReleases { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginCombatChunk DbSet - batches of combat events drained from the RustArchon plugin.
+    /// </summary>
+    public DbSet<PluginCombatChunk> PluginCombatChunks { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginTcSnapshot DbSet - each server's current tool cupboard list from the RustArchon plugin.
+    /// </summary>
+    public DbSet<PluginTcSnapshot> PluginTcSnapshots { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginPositionChunk DbSet - batches of player position samples drained from the RustArchon plugin.
+    /// </summary>
+    public DbSet<PluginPositionChunk> PluginPositionChunks { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginMap DbSet - each server's world map (per wipe) as reported by the RustArchon plugin.
+    /// </summary>
+    public DbSet<PluginMap> PluginMaps { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginMapUploadToken DbSet - single-use permissions for a game server to send a map picture.
+    /// </summary>
+    public DbSet<PluginMapUploadToken> PluginMapUploadTokens { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the Plan DbSet.
     /// </summary>
     public DbSet<Plan> Plans { get; set; } = null!;
@@ -284,6 +334,17 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
             .IsUnique()
             .HasFilter("\"DeletedOn\" IS NULL")
             .HasDatabaseName("IX_RustServer_TenantId_Name");
+
+        // Both RustArchon-plugin switches are ON by default (opt-out). A C# property initializer alone is not
+        // enough: EF's generated AddColumn for a non-nullable bool uses the type default (false), which would
+        // silently switch every EXISTING server off. HasDefaultValue(true) makes the column default, and so
+        // the migration's backfill, true. Verified in the AddPluginStatusAndSettings migration.
+        modelBuilder.Entity<RustServer>()
+            .Property(s => s.PluginRecordingEnabled)
+            .HasDefaultValue(true);
+        modelBuilder.Entity<RustServer>()
+            .Property(s => s.PluginCombatLogEnabled)
+            .HasDefaultValue(true);
 
         // The above index only covers the open row, so it can't serve a history query - this one does,
         // in the order GetHistoryForTenantAsync reads them.

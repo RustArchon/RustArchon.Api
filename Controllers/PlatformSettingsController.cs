@@ -80,6 +80,7 @@ public class PlatformSettingsController : ControllerBase
         PlatformSettingsRegistry.StripeWebhookSecret => ApiKeyProtectorPurposes.StripeWebhookSecret,
         PlatformSettingsRegistry.TicketingWebhookSecret => ApiKeyProtectorPurposes.TicketingWebhookSecret,
         PlatformSettingsRegistry.CaptchaSecretKey => ApiKeyProtectorPurposes.CaptchaSecretKey,
+        PlatformSettingsRegistry.PluginSigningKey => ApiKeyProtectorPurposes.PluginSigningKey,
         _ => throw new InvalidOperationException(
             $"'{key}' is declared as a Secret setting but has no IApiKeyProtector purpose registered.")
     };
@@ -121,6 +122,13 @@ public class PlatformSettingsController : ControllerBase
     [HttpPut("{key}")]
     public async Task<ActionResult<PlatformSettingDto>> UpdateValue(string key, [FromBody] UpdatePlatformSettingValueDto updateDto)
     {
+        // The plugin signing key is changed only by rotating it on the Plugin admin page, which keeps the old one. Typing
+        // over it here would silently strand every plugin already installed from this Panel.
+        if (key == PlatformSettingsRegistry.PluginSigningKey)
+        {
+            return BadRequest("The plugin signing key is managed on the Plugin page: rotate it there, which keeps the old key so installed plugins can still be updated.");
+        }
+
         var entity = await _repository.GetByKeyAsync(key);
         if (entity is null)
         {

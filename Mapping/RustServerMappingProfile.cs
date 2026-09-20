@@ -73,5 +73,17 @@ public class RustServerMappingProfile
         updateMap.ForMember(dest => dest.ConnectionStatusChangedAtUtc, opt => opt.Ignore());
         updateMap.ForMember(dest => dest.AssignedWorkerId, opt => opt.Ignore());
         updateMap.ForMember(dest => dest.LastHeartbeatUtc, opt => opt.Ignore());
+
+        // The RustArchon-plugin switches are NOT on the create/update DTOs, on purpose: Update is a full-record
+        // PUT, and carrying them would let an ordinary edit from a client that does not send them silently reset a
+        // switch someone turned off. They are changed only through PUT plugin-settings (see UpdatePluginSettings),
+        // and a new server takes the entity's own default of on.
+        createMap.ForMember(dest => dest.PluginRecordingEnabled, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.PluginCombatLogEnabled, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.PluginRecordingEnabled, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.PluginCombatLogEnabled, opt => opt.Ignore());
+        // Same reasoning, and stronger: updates are OFF by default and must only ever be turned on deliberately.
+        createMap.ForMember(dest => dest.PluginUpdatesEnabled, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.PluginUpdatesEnabled, opt => opt.Ignore());
     }
 }

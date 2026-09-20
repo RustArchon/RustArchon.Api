@@ -20,6 +20,8 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="SkiaSharp" Version="4.152.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.152.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
     <!-- Valkey speaks the Redis protocol, so the standard Redis client works against it unmodified. -->
     <PackageReference Include="StackExchange.Redis" Version="3.2.1" />
@@ -49,6 +51,21 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Administration\DefaultTheme\theme.css">
       <LogicalName>RustArchon.Api.Administration.DefaultTheme.theme.css</LogicalName>
+    </EmbeddedResource>
+
+    <!-- The RustArchon companion plugin's source, from the sibling RustArchon.Plugin repo. This Panel stamps its own
+         public signing key into it and signs it when it is downloaded (see PluginScriptService), so the plugin's
+         version always tracks the Panel's. It is only embedded, never compiled here: it targets the game server's
+         framework, not this one. Sibling-relative like the other project references; the Dockerfile copies that
+         folder in for the same reason. -->
+    <EmbeddedResource Include="..\RustArchon.Plugin\src\RustArchon.cs">
+      <LogicalName>RustArchon.Plugin.RustArchon.cs</LogicalName>
+    </EmbeddedResource>
+
+    <!-- The Updater: the second, separate plugin that swaps the main one and rolls back on failure. Served signed the
+         same way, but only ever installed by hand - a failed Updater would have nothing left to recover it. -->
+    <EmbeddedResource Include="..\RustArchon.Plugin\src\RustArchonUpdater.cs">
+      <LogicalName>RustArchon.Plugin.RustArchonUpdater.cs</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
 

@@ -13,6 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using RustArchon.Api.Data;
+using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Repositories;
 using RustArchon.Messaging.Contracts;
@@ -46,6 +47,9 @@ public class RustServersController
     private readonly IServerInfoSnapshotRepository _serverInfoSnapshotRepository;
     private readonly IConnectionLogRepository _connectionLogRepository;
     private readonly IServerPluginRepository _serverPluginRepository;
+    private readonly IServerPluginStatusRepository _serverPluginStatusRepository;
+    private readonly IPluginScriptService _pluginScriptService;
+    private readonly IPluginUpdateService _pluginUpdateService;
     private readonly ISubscriptionRepository _subscriptionRepository;
 
     public RustServersController(
@@ -64,6 +68,9 @@ public class RustServersController
         IServerInfoSnapshotRepository serverInfoSnapshotRepository,
         IConnectionLogRepository connectionLogRepository,
         IServerPluginRepository serverPluginRepository,
+        IServerPluginStatusRepository serverPluginStatusRepository,
+        IPluginScriptService pluginScriptService,
+        IPluginUpdateService pluginUpdateService,
         ISubscriptionRepository subscriptionRepository)
         : base(repository, mapper, logger, correlationContext)
     {
@@ -78,6 +85,9 @@ public class RustServersController
         _serverInfoSnapshotRepository = serverInfoSnapshotRepository ?? throw new ArgumentNullException(nameof(serverInfoSnapshotRepository));
         _connectionLogRepository = connectionLogRepository ?? throw new ArgumentNullException(nameof(connectionLogRepository));
         _serverPluginRepository = serverPluginRepository ?? throw new ArgumentNullException(nameof(serverPluginRepository));
+        _serverPluginStatusRepository = serverPluginStatusRepository ?? throw new ArgumentNullException(nameof(serverPluginStatusRepository));
+        _pluginScriptService = pluginScriptService ?? throw new ArgumentNullException(nameof(pluginScriptService));
+        _pluginUpdateService = pluginUpdateService ?? throw new ArgumentNullException(nameof(pluginUpdateService));
         _subscriptionRepository = subscriptionRepository ?? throw new ArgumentNullException(nameof(subscriptionRepository));
     }
 
@@ -691,6 +701,176 @@ public class RustServersController
 
         var plugins = await _serverPluginRepository.GetForServerAsync(id);
         return Ok(_mapper.Map<IEnumerable<ServerPluginDto>>(plugins));
+    }
+
+    /// <summary>
+    /// The RustArchon companion plugin script, with this deployment's public signing key stamped in and a signature
+    /// appended - what an admin uploads to <c>carbon/plugins</c> (or <c>oxide/plugins</c>) to install it. The first
+    /// request ever creates the deployment's signing key. The file is identical for every tenant (it carries no tenant
+    /// data and no secret), so this asks only for the same permission as listing servers. <c>503</c> if the stored
+    /// signing key is unusable, which is never "fixed" by silently making a new one.
+    /// </summary>
+    [HttpGet("plugin/download")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<IActionResult> DownloadPlugin()
+    {
+        try
+        {
+            var script = await _pluginScriptService.BuildAsync();
+
+            // Exposed so a caller can show which key this file will trust without parsing it.
+            Response.Headers["X-RustArchon-Key-Fingerprint"] = script.KeyFingerprint;
+            if (script.PluginVersion is not null)
+            {
+                Response.Headers["X-RustArchon-Plugin-Version"] = script.PluginVersion;
+            }
+
+            return File(script.Bytes, "text/plain; charset=utf-8", "RustArchon.cs");
+        }
+        catch (PluginSigningKeyException ex)
+        {
+            _logger.LogError(ex, "The RustArchon plugin could not be signed for download.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, "The plugin signing key is unavailable. See the Api log.");
+        }
+    }
+
+    /// <summary>
+    /// The RustArchon <b>Updater</b> plugin, stamped and signed like the main one. Installed by hand once; after that it
+    /// carries out updates of the main plugin (and is itself only ever replaced by hand, since a failed Updater would
+    /// have nothing left to recover it). Same permission and same failure behavior as <see cref="DownloadPlugin"/>.
+    /// </summary>
+    [HttpGet("plugin/download-updater")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<IActionResult> DownloadPluginUpdater()
+    {
+        try
+        {
+            var script = await _pluginScriptService.BuildUpdaterAsync();
+
+            Response.Headers["X-RustArchon-Key-Fingerprint"] = script.KeyFingerprint;
+            if (script.PluginVersion is not null)
+            {
+                Response.Headers["X-RustArchon-Plugin-Version"] = script.PluginVersion;
+            }
+
+            return File(script.Bytes, "text/plain; charset=utf-8", "RustArchonUpdater.cs");
+        }
+        catch (PluginSigningKeyException ex)
+        {
+            _logger.LogError(ex, "The RustArchon Updater could not be signed for download.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, "The plugin signing key is unavailable. See the Api log.");
+        }
+    }
+
+    /// <summary>
+    /// Asks the server's Updater plugin to update the RustArchon plugin to the version this Panel serves. Every
+    /// precondition is checked first (updates enabled for this server, installed plugin signed by this Panel, Updater
+    /// present, a newer version to install) and a refusal comes back as an ordinary <see cref="PluginUpdateResultDto"/>
+    /// with a <c>Code</c> saying why. A single-use token is minted only once everything else passes. See
+    /// <see cref="PluginUpdateService"/>.
+    /// </summary>
+    [HttpPost("{id}/plugin/update")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Update")]
+    public async Task<ActionResult<PluginUpdateResultDto>> StartPluginUpdate(Guid id)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(await _pluginUpdateService.StartAsync(entity));
+    }
+
+    /// <summary>
+    /// Gets what the optional RustArchon companion plugin last reported on this server - see
+    /// <see cref="ServerPluginStatus"/>. <c>204 No Content</c> when the plugin has never answered (not installed,
+    /// not yet polled, or too old to understand the handshake). A caller must still confirm the plugin is in the
+    /// server's plugin list before trusting this: it can go stale after an uninstall.
+    /// </summary>
+    [HttpGet("{id}/plugin-status")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<ServerPluginStatusDto>> GetPluginStatus(Guid id)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        var status = await _serverPluginStatusRepository.GetForServerAsync(id);
+        if (status is null)
+        {
+            return NoContent();
+        }
+
+        var dto = _mapper.Map<ServerPluginStatusDto>(status);
+
+        // What an update would install, and whether the separate Updater is there to do it.
+        dto.LatestPluginVersion = await _pluginScriptService.GetLatestVersionAsync();
+        dto.UpdateAvailable = PluginVersions.IsNewer(dto.LatestPluginVersion, dto.PluginVersion);
+        var listed = await _serverPluginRepository.GetForServerAsync(id) ?? [];
+        var updater = listed.FirstOrDefault(p => string.Equals(p.Name, RustArchonPlugin.UpdaterName, StringComparison.OrdinalIgnoreCase));
+        dto.UpdaterInstalled = updater is not null;
+        dto.UpdaterVersion = updater?.Version?.TrimStart('v', 'V');
+        dto.LatestUpdaterVersion = await _pluginScriptService.GetLatestUpdaterVersionAsync();
+        dto.UpdaterUpdateAvailable = PluginVersions.IsNewer(dto.LatestUpdaterVersion, dto.UpdaterVersion);
+
+        // Does the installed plugin trust THIS Panel's key? Only knowable when both sides have one; otherwise null.
+        // A read: it must never be what creates this Panel's key.
+        var panelFingerprint = await _pluginScriptService.GetKeyFingerprintIfAnyAsync();
+        dto.SigningKeyMatchesThisPanel = dto.SigningKeyFingerprint.Length == 0 || panelFingerprint is null
+            ? null
+            : string.Equals(dto.SigningKeyFingerprint, panelFingerprint, StringComparison.OrdinalIgnoreCase);
+
+        // Where that key stands in this Panel's history (a plain read; unknown or unreadable is empty, never a guess).
+        var keyState = dto.SigningState == PluginSigningStates.Valid && dto.SigningKeyFingerprint.Length > 0
+            ? await _pluginScriptService.GetKeyStateAsync(dto.SigningKeyFingerprint)
+            : null;
+        dto.SigningKeyState = keyState?.ToString().ToLowerInvariant() ?? string.Empty;
+
+        return Ok(dto);
+    }
+
+    /// <summary>
+    /// Saves the RustArchon plugin's two switches (Recording, Combat log) for this server and, if either actually
+    /// changed, tells the plugin so right away - see <see cref="ServerPluginSettingsChanged"/>. Returns the
+    /// server. Separate from <see cref="Update"/> on purpose: that is a full-record PUT, and these switches must
+    /// only ever change because someone changed them (see <see cref="UpdateServerPluginSettingsDto"/>).
+    /// </summary>
+    [HttpPut("{id}/plugin-settings")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Update")]
+    public async Task<ActionResult<RustServerDto>> UpdatePluginSettings(Guid id, [FromBody] UpdateServerPluginSettingsDto settings)
+    {
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        // Only the recording and combat switches are ever pushed to the plugin; the updates switch is a Panel-side
+        // permission the plugin never sees, so changing it must not send a command.
+        var changed = entity.PluginRecordingEnabled != settings.RecordingEnabled!.Value
+            || entity.PluginCombatLogEnabled != settings.CombatLogEnabled!.Value;
+
+        entity.PluginRecordingEnabled = settings.RecordingEnabled!.Value;
+        entity.PluginCombatLogEnabled = settings.CombatLogEnabled!.Value;
+        entity.PluginUpdatesEnabled = settings.UpdatesEnabled!.Value;
+        var updated = await _repository.UpdateAsync(entity);
+
+        // Only when a switch actually changed, and only for a server a Worker is looking after. The consumer
+        // reads the saved values, so this message carries none.
+        if (changed && updated.IsEnabled)
+        {
+            await _publishEndpoint.Publish(new ServerPluginSettingsChanged(updated.Id, updated.TenantId));
+        }
+
+        return Ok(_mapper.Map<RustServerDto>(updated));
     }
 
     /// <summary>
