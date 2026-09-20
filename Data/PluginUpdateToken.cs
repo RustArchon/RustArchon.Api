@@ -25,6 +25,13 @@ namespace RustArchon.Api.Data;
 /// opportunistically whenever a new one is minted, so the table cannot grow without bound.
 /// </para>
 /// </remarks>
+/// <summary>The files a <see cref="PluginUpdateToken"/> can be redeemed for.</summary>
+public static class PluginUpdateTokenPurposes
+{
+    public const string Main = "main";
+    public const string Updater = "updater";
+}
+
 [Table("PluginUpdateToken")]
 [Index(nameof(TokenHash), IsUnique = true, Name = "IX_PluginUpdateToken_TokenHash")]
 [Index(nameof(ExpiresAtUtc), Name = "IX_PluginUpdateToken_ExpiresAtUtc")]
@@ -42,6 +49,14 @@ public class PluginUpdateToken : Entity, ITenantScoped
     /// </summary>
     [MaxLength(16)]
     public string SigningKeyFingerprint { get; set; } = string.Empty;
+
+    /// <summary>
+    /// What the token may download: <see cref="PluginUpdateTokenPurposes.Main"/> (the RustArchon plugin, what every token was before this
+    /// existed) or <see cref="PluginUpdateTokenPurposes.Updater"/> (the Updater plugin). A token is good for exactly one of them.
+    /// </summary>
+    [Required]
+    [MaxLength(16)]
+    public string Purpose { get; set; } = PluginUpdateTokenPurposes.Main;
 
     /// <summary>Lower-case hex SHA-256 of the token. Never the token.</summary>
     [Required]

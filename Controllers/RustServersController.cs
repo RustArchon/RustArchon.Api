@@ -783,6 +783,24 @@ public class RustServersController
     }
 
     /// <summary>
+    /// Asks the server's RustArchon plugin to install or update the <b>Updater</b> plugin to the version this Panel serves (the Updater
+    /// cannot replace itself; the main plugin does it and puts the old one back if the new one does not come up). Same preconditions,
+    /// permission and result shape as <see cref="StartPluginUpdate"/>. See <see cref="PluginUpdateService.StartUpdaterAsync"/>.
+    /// </summary>
+    [HttpPost("{id}/plugin/update-updater")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Update")]
+    public async Task<ActionResult<PluginUpdateResultDto>> StartUpdaterUpdate(Guid id)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(await _pluginUpdateService.StartUpdaterAsync(entity));
+    }
+
+    /// <summary>
     /// Gets what the optional RustArchon companion plugin last reported on this server - see
     /// <see cref="ServerPluginStatus"/>. <c>204 No Content</c> when the plugin has never answered (not installed,
     /// not yet polled, or too old to understand the handshake). A caller must still confirm the plugin is in the

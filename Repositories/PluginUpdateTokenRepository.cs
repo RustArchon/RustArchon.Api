@@ -17,7 +17,7 @@ namespace RustArchon.Api.Repositories;
 /// The key the server's installed plugin trusts (as reported when the token was minted): the download is signed with
 /// it, as a bridge to the active key when they differ.
 /// </param>
-public sealed record PluginTokenRedemption(string SigningKeyFingerprint, Guid RustServerId = default);
+public sealed record PluginTokenRedemption(string SigningKeyFingerprint, Guid RustServerId = default, string Purpose = PluginUpdateTokenPurposes.Main);
 
 /// <summary>Mints and redeems the single-use tokens a plugin update hands the game server.</summary>
 public interface IPluginUpdateTokenRepository : IRepository<PluginUpdateToken>
@@ -26,6 +26,9 @@ public interface IPluginUpdateTokenRepository : IRepository<PluginUpdateToken>
     /// Creates a token for one server and returns it. The raw token is returned only here; the database keeps a hash.
     /// </summary>
     Task<string> MintAsync(Guid tenantId, Guid rustServerId, string signingKeyFingerprint, TimeSpan lifetime);
+
+    /// <summary>The same for a token that downloads something other than the main plugin - see <see cref="PluginUpdateTokenPurposes"/>.</summary>
+    Task<string> MintAsync(Guid tenantId, Guid rustServerId, string signingKeyFingerprint, TimeSpan lifetime, string purpose);
 
     /// <summary>
     /// Uses a token: a redemption exactly once, and only for the server it was minted for, before it expires. Anything
@@ -60,9 +63,16 @@ public class PluginUpdateTokenRepository(ApiDbContext context, TimeProvider cloc
     public static string HashToken(string rawToken) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
 
-    public async Task<string> MintAsync(Guid tenantId, Guid rustServerId, string signingKeyFingerprint, TimeSpan lifetime)
+    public Task<string> MintAsync(Guid tenantId, Guid rustServerId, string signingKeyFingerprint, TimeSpan lifetime) =>
+        MintAsync(tenantId, rustServerId, signingKeyFingerprint, lifetime, PluginUpdateTokenPurposes.Main);
+
+    public async Task<string> MintAsync(Guid tenantId, Guid rustServerId, string signingKeyFingerprint, TimeSpan lifetime, string purpose)
     {
         ArgumentException.ThrowIfNullOrEmpty(signingKeyFingerprint);
+        if (purpose is not (PluginUpdateTokenPurposes.Main or PluginUpdateTokenPurposes.Updater))
+        {
+            throw new ArgumentException("Unknown token purpose.", nameof(purpose));
+        }
 
         var now = clock.GetUtcNow();
         var raw = NewToken();
@@ -72,6 +82,7 @@ public class PluginUpdateTokenRepository(ApiDbContext context, TimeProvider cloc
             TenantId = tenantId,
             RustServerId = rustServerId,
             SigningKeyFingerprint = signingKeyFingerprint,
+            Purpose = purpose,
             TokenHash = HashToken(raw),
             CreatedAtUtc = now,
             ExpiresAtUtc = now + lifetime
@@ -113,10 +124,10 @@ public class PluginUpdateTokenRepository(ApiDbContext context, TimeProvider cloc
         // The row is ours now (redeemed, so nobody else can), and its fingerprint never changes: read it back.
         var row = await _dbSet.AcrossAllTenants().AsNoTracking()
             .Where(t => t.TokenHash == hash && (rustServerId == null || t.RustServerId == rustServerId))
-            .Select(t => new { t.SigningKeyFingerprint, t.RustServerId })
+            .Select(t => new { t.SigningKeyFingerprint, t.RustServerId, t.Purpose })
             .FirstOrDefaultAsync();
 
-        return row is null || string.IsNullOrEmpty(row.SigningKeyFingerprint) ? null : new PluginTokenRedemption(row.SigningKeyFingerprint, row.RustServerId);
+        return row is null || string.IsNullOrEmpty(row.SigningKeyFingerprint) ? null : new PluginTokenRedemption(row.SigningKeyFingerprint, row.RustServerId, row.Purpose);
     }
 
     public async Task RevokeAsync(string rawToken)

@@ -21,6 +21,12 @@ public interface IPluginUpdateService
     /// to fetch and verify the current version. Never throws for a refusal - see <see cref="PluginUpdateResultDto.Code"/>.
     /// </summary>
     Task<PluginUpdateResultDto> StartAsync(RustServer server);
+
+    /// <summary>
+    /// The same for the Updater plugin itself, carried out by the main plugin (the Updater cannot replace itself). Installs it when it is
+    /// missing. Every precondition is checked first, and a refusal is an ordinary result with a <see cref="PluginUpdateResultDto.Code"/>.
+    /// </summary>
+    Task<PluginUpdateResultDto> StartUpdaterAsync(RustServer server);
 }
 
 /// <inheritdoc cref="IPluginUpdateService" />
@@ -175,6 +181,120 @@ public class PluginUpdateService(
         {
             await tokens.RevokeAsync(token);
             return Refused("timeout", "The server did not answer in time.", status.PluginVersion, latest);
+        }
+    }
+
+    public async Task<PluginUpdateResultDto> StartUpdaterAsync(RustServer server)
+    {
+        if (!server.IsEnabled)
+        {
+            return Refused("server_disabled", "This server is disabled.");
+        }
+
+        if (!server.PluginUpdatesEnabled)
+        {
+            return Refused("updates_disabled", "Plugin updates are not enabled for this server.");
+        }
+
+        var status = await statuses.GetForServerAcrossTenantsAsync(server.TenantId, server.Id);
+        if (status is null)
+        {
+            return Refused("no_handshake", "The plugin has not reported in yet.");
+        }
+
+        // The plugin that carries this out must vouch for itself, and for the key the new Updater will be signed with: this Panel's
+        // ACTIVE key. A server still on an older key is moved to the current one by updating the plugin first (a bridge).
+        var keyState = status.SigningState == PluginSigningStates.Valid
+            ? await script.GetKeyStateAsync(status.SigningKeyFingerprint)
+            : null;
+        if (keyState is null or PluginKeyState.Revoked)
+        {
+            return Refused(
+                keyState is null ? "not_signed_by_this_panel" : "key_revoked",
+                "The installed plugin is not signed by a key this Panel can update from. Download the plugin from this Panel and install it by hand.",
+                status.PluginVersion);
+        }
+
+        if (keyState != PluginKeyState.Active)
+        {
+            return Refused(
+                "update_plugin_first",
+                "This server's plugin still trusts an older signing key. Update the plugin first; the Updater can be updated after that.",
+                status.PluginVersion);
+        }
+
+        if (!status.Capabilities.Contains(RustArchonPlugin.UpdaterUpdateCapability, StringComparer.Ordinal))
+        {
+            return Refused(
+                "plugin_too_old",
+                "The installed plugin is too old to update the Updater. Update the plugin first (the Updater can then be updated from here), or install the Updater by hand.",
+                status.PluginVersion);
+        }
+
+        var installedPlugins = await plugins.GetForServerAsync(server.Id) ?? [];
+        var updater = installedPlugins.FirstOrDefault(p => string.Equals(p.Name, RustArchonPlugin.UpdaterName, StringComparison.OrdinalIgnoreCase));
+        var installedVersion = updater?.Version?.TrimStart('v', 'V');
+
+        var latest = await script.GetLatestUpdaterVersionAsync();
+        if (latest is null)
+        {
+            return Refused("no_updater_version", "This Panel does not serve an Updater.", installedVersion);
+        }
+
+        if (updater is not null && !PluginVersions.IsNewer(latest, installedVersion))
+        {
+            return Refused("up_to_date", "The Updater is already the newest version this Panel serves.", installedVersion, latest);
+        }
+
+        var baseUrl = await settings.GetStringAsync(PlatformSettingsRegistry.PanelBaseUrl);
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var panelUri) || (panelUri.Scheme != Uri.UriSchemeHttp && panelUri.Scheme != Uri.UriSchemeHttps))
+        {
+            return Refused(
+                "panel_url_invalid",
+                "The Panel base URL platform setting is not set to an address the game server can reach.",
+                installedVersion,
+                latest);
+        }
+
+        var token = await tokens.MintAsync(
+            server.TenantId, server.Id, status.SigningKeyFingerprint.ToLowerInvariant(), TokenLifetime, PluginUpdateTokenPurposes.Updater);
+        var panelBase = $"{panelUri.GetLeftPart(UriPartial.Authority)}{panelUri.AbsolutePath.TrimEnd('/')}";
+
+        try
+        {
+            var response = await sendCommandClient.GetResponse<RconCommandResult>(
+                new SendRconCommand(server.Id, $"archon.updater.update {latest} {panelBase}/ingest/plugin {token}", Interactive: false),
+                timeout: RequestTimeout.After(s: 10));
+
+            if (!response.Message.Success)
+            {
+                await tokens.RevokeAsync(token);
+                return Refused("not_connected", "The server is not connected right now.", installedVersion, latest);
+            }
+
+            var (accepted, code, message) = ParseReply(response.Message.Message);
+            if (!accepted)
+            {
+                await tokens.RevokeAsync(token);
+                return Refused(code == "updater_missing" ? "plugin_too_old" : code, message, installedVersion, latest);
+            }
+
+            logger.LogInformation(
+                "Started RustArchon Updater {Action} {From} -> {To} on server {ServerId}.",
+                updater is null ? "install" : "update", installedVersion ?? "none", latest, server.Id);
+            return new PluginUpdateResultDto
+            {
+                Started = true,
+                Code = "started",
+                Message = updater is null ? "The plugin accepted the request and is installing the Updater." : "The plugin accepted the update and is downloading the new Updater.",
+                FromVersion = installedVersion,
+                ToVersion = latest
+            };
+        }
+        catch (RequestTimeoutException)
+        {
+            await tokens.RevokeAsync(token);
+            return Refused("timeout", "The server did not answer in time.", installedVersion, latest);
         }
     }
 
