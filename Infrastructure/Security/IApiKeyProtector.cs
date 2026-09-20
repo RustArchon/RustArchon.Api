@@ -41,4 +41,5 @@ public static class ApiKeyProtectorPurposes
     public const string TicketingWebhookSecret = "RustArchon.PlatformSetting.TicketingWebhookSecret.v1";
     public const string CaptchaSecretKey = "RustArchon.PlatformSetting.CaptchaSecretKey.v1";
     public const string PluginSigningKey = "RustArchon.PlatformSetting.PluginSigningKey.v1";
+    public const string ReportsSecret = "RustArchon.RustServer.ReportsSecret.v1";
 }

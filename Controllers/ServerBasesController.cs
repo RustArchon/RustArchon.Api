@@ -1,6 +1,7 @@
 // Copyright ©2026 Scott Blomfield
 
 using System;
+using System.Linq;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using JumpStart.Authorization;
@@ -28,7 +29,8 @@ namespace RustArchon.Api.Controllers;
 [Authorize]
 [RequirePermission(PermissionCatalog.ServerViewBases)]
 public class ServerBasesController(
-    IRustServerRepository servers, IPluginTcSnapshotRepository snapshots, ILogger<ServerBasesController> logger) : ControllerBase
+    IRustServerRepository servers, IPluginTcSnapshotRepository snapshots, IPlayerSessionRepository sessions,
+    ILogger<ServerBasesController> logger) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<BasesDto>> Get(Guid id)
@@ -44,6 +46,42 @@ public class ServerBasesController(
             "Bases of server {ServerId} viewed by {User}.", id,
             User.FindFirstValue(ClaimTypes.Email) ?? User.FindFirstValue("email") ?? User.Identity?.Name ?? "unknown");
 
-        return Ok(await snapshots.GetAsync(id));
+        var bases = await snapshots.GetAsync(id);
+        await NameThePlayersAsync(server.TenantId, id, bases);
+        return Ok(bases);
+    }
+
+    /// <summary>
+    /// The plugin can only name players who are in the world right now, so anyone else arrives as a bare id. Fills the gap from the
+    /// names the Api has recorded for those players' sessions on this server (they had to connect to be on a cupboard, and the Worker
+    /// records every connection). What the plugin named stays as it was; a player nothing has a name for stays an id.
+    /// </summary>
+    private async Task NameThePlayersAsync(Guid tenantId, Guid serverId, BasesDto bases)
+    {
+        var unnamed = bases.Tcs
+            .SelectMany(tc => tc.Authorized.Where(a => string.IsNullOrEmpty(a.Name)).Select(a => a.PlayerId).Append(tc.OwnerId))
+            .Where(id => !string.IsNullOrEmpty(id))
+            .Distinct()
+            .ToList();
+        if (unnamed.Count == 0)
+        {
+            return;
+        }
+
+        var names = await sessions.GetLatestNamesAsync(tenantId, serverId, unnamed);
+
+        foreach (var tc in bases.Tcs)
+        {
+            foreach (var authorized in tc.Authorized.Where(a => string.IsNullOrEmpty(a.Name)))
+            {
+                if (names.TryGetValue(authorized.PlayerId, out var name))
+                {
+                    authorized.Name = name;
+                }
+            }
+
+            var owner = tc.Authorized.FirstOrDefault(a => a.PlayerId == tc.OwnerId && !string.IsNullOrEmpty(a.Name));
+            tc.OwnerName = owner?.Name ?? (names.TryGetValue(tc.OwnerId, out var ownerName) ? ownerName : string.Empty);
+        }
     }
 }

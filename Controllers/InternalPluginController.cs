@@ -6,8 +6,10 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Repositories;
+using RustArchon.Messaging.Contracts;
 
 namespace RustArchon.Api.Controllers;
 
@@ -49,8 +51,53 @@ public class InternalPluginController(
             return NotFound();
         }
 
+        return await ServeAsync(serverId, redemption);
+    }
+
+    /// <summary>
+    /// The same as <see cref="Download(Guid, string)"/> for an Updater from 0.3.0 on: the token arrives in the
+    /// <c>X-RustArchon-Update-Token</c> header instead of the address, and says by itself which server it was minted for. Every refusal is
+    /// the same bare <c>404</c>.
+    /// </summary>
+    [HttpGet("download")]
+    public async Task<IActionResult> DownloadWithHeaderToken([FromHeader(Name = RustArchonPlugin.UpdateTokenHeader)] string? token)
+    {
+        Response.Headers.CacheControl = "no-store";
+
+        if (string.IsNullOrEmpty(token) || token.Length > MaxTokenLength)
+        {
+            return NotFound();
+        }
+
+        var redemption = await tokens.RedeemAsync(token);
+        if (redemption is null)
+        {
+            return NotFound();
+        }
+
+        return await ServeAsync(redemption.RustServerId, redemption);
+    }
+
+    private async Task<IActionResult> ServeAsync(Guid serverId, PluginTokenRedemption redemption)
+    {
         try
         {
+            // The Updater is signed with the Panel's active key, which is what the plugin that installs it must trust: if the server
+            // still trusts an older key it has to be moved to the new one first (a bridge of the main plugin), so this is refused.
+            if (redemption.Purpose == PluginUpdateTokenPurposes.Updater)
+            {
+                if (await script.GetKeyStateAsync(redemption.SigningKeyFingerprint) != PluginKeyState.Active)
+                {
+                    logger.LogWarning("An Updater download token was redeemed for server {ServerId} but its key is not the active one.", serverId);
+                    return NotFound();
+                }
+
+                var updater = await script.BuildUpdaterAsync();
+                Response.Headers["X-RustArchon-Plugin-Version"] = updater.PluginVersion ?? "";
+                Response.Headers.CacheControl = "no-store";
+                return File(updater.Bytes, "text/plain; charset=utf-8", "RustArchonUpdater.cs");
+            }
+
             // Signed with the key the server's installed plugin trusts - a bridge to the active key if that is an older one.
             var built = await script.BuildBridgeAsync(redemption.SigningKeyFingerprint);
             Response.Headers["X-RustArchon-Plugin-Version"] = built.PluginVersion ?? "";

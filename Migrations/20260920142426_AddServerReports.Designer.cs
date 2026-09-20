@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260920142426_AddServerReports")]
+    partial class AddServerReports
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2311,63 +2314,6 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("PluginTcSnapshot");
                 });
 
-            modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateAttempt", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("FromVersion")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.Property<DateTimeOffset?>("ResolvedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("RustServerId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("StartedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ToVersion")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
-                    b.Property<string>("Trigger")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex(new[] { "RustServerId", "StartedAtUtc" }, "IX_PluginUpdateAttempt_Server_StartedAtUtc");
-
-                    b.HasIndex(new[] { "TenantId", "StartedAtUtc" }, "IX_PluginUpdateAttempt_Tenant_StartedAtUtc");
-
-                    b.ToTable("PluginUpdateAttempt");
-                });
-
             modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateNotice", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2443,11 +2389,6 @@ namespace RustArchon.Api.Migrations
 
                     b.Property<DateTimeOffset>("ExpiresAtUtc")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Purpose")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
 
                     b.Property<DateTimeOffset?>("RedeemedAtUtc")
                         .HasColumnType("timestamp with time zone");
@@ -2639,9 +2580,6 @@ namespace RustArchon.Api.Migrations
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<bool>("PluginAutoUpdateEnabled")
-                        .HasColumnType("boolean");
 
                     b.Property<bool>("PluginCombatLogEnabled")
                         .ValueGeneratedOnAdd()
@@ -3811,17 +3749,6 @@ namespace RustArchon.Api.Migrations
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.PluginTcSnapshot", b =>
-                {
-                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateAttempt", b =>
                 {
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
                         .WithMany()

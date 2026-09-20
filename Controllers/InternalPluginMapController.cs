@@ -108,6 +108,20 @@ public class InternalPluginMapController(
             return BadRequest("Not a PNG.");
         }
 
+        // A few hundred bytes can claim to be 60,000 pixels across; the declared size is read from the header and held to a
+        // ceiling before anything is stored or decoded.
+        if (!PngHeader.TryReadSize(bytes, out var pictureWidth, out var pictureHeight))
+        {
+            logger.LogWarning("Server {ServerId} sent a map upload with no readable PNG header; refused.", serverId);
+            return BadRequest("Not a PNG.");
+        }
+
+        if (!PngHeader.IsAcceptableMapSize(pictureWidth, pictureHeight))
+        {
+            logger.LogWarning("Server {ServerId} sent a {Width} x {Height} map picture; the limit is {Max} pixels a side. Refused.", serverId, pictureWidth, pictureHeight, PngHeader.MaxMapSide);
+            return BadRequest("The picture is larger than the limit.");
+        }
+
         var key = $"maps/{map.RustServerId}/{map.WorldSize}_{map.WorldSeed}.png";
         await storage.PutAsync(key, bytes, "image/png");
         await maps.RecordUploadAsync(map.Id, bytes.Length, Convert.ToHexStringLower(sha.Hash!), key, clock.GetUtcNow());

@@ -75,6 +75,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<PlayerKillEvent> PlayerKillEvents { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the ServerReport DbSet.
+    /// </summary>
+    public DbSet<ServerReport> ServerReports { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the ServerInfoSnapshot DbSet.
     /// </summary>
     public DbSet<ServerInfoSnapshot> ServerInfoSnapshots { get; set; } = null!;
@@ -133,6 +138,16 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// Gets or sets the PluginMapUploadToken DbSet - single-use permissions for a game server to send a map picture.
     /// </summary>
     public DbSet<PluginMapUploadToken> PluginMapUploadTokens { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginUpdateNotice DbSet - the newest update UpdateChecker has reported for each plugin on each server.
+    /// </summary>
+    public DbSet<PluginUpdateNotice> PluginUpdateNotices { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginUpdateAttempt DbSet - each time the Panel asked a server to update its plugin or Updater, and how it went.
+    /// </summary>
+    public DbSet<PluginUpdateAttempt> PluginUpdateAttempts { get; set; } = null!;
 
     /// <summary>
     /// Gets or sets the Plan DbSet.

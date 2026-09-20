@@ -64,6 +64,28 @@ public static class PermissionCatalog
     /// </remarks>
     public const string ServerViewPositions = "RustServer.ViewPositions";
 
+    /// <summary>
+    /// Reading the in-game (F7) reports players file on a server, including any screenshot attached to one.
+    /// </summary>
+    /// <remarks>
+    /// Its own permission, not folded into <see cref="ServerGet"/>: a report can name a player and carry a picture of the reporter's
+    /// screen, so a role that may merely look at a server must not thereby read what its players said about each other.
+    /// </remarks>
+    public const string ServerViewReports = "RustServer.ViewReports";
+
+    /// <summary>Changing what has been done about a report (reviewing, actioning, dismissing it).</summary>
+    public const string ServerManageReports = "RustServer.ManageReports";
+
+    /// <summary>
+    /// Seeing and rotating a server's report-forwarding address.
+    /// </summary>
+    /// <remarks>
+    /// The address contains the secret that lets a game server file reports here (ADR-0001), so it is its own permission. It is
+    /// deliberately a tenant permission held by the Owner, not a platform one: the customer sets the address on their own game
+    /// server, so they have to be able to read it. A site admin acting as the tenant passes it like every other permission.
+    /// </remarks>
+    public const string ServerManageReportForwarding = "RustServer.ManageReportForwarding";
+
     /// <summary>Reading the Organization's own plan, invoices and billing history.</summary>
     public const string SubscriptionView = "Subscription.View";
 
@@ -141,6 +163,7 @@ public static class PermissionCatalog
     public static readonly string[] OwnerPermissions =
     [
         ServerGet, ServerList, ServerCreate, ServerUpdate, ServerDelete, ServerSendCommand, ServerViewBases, ServerViewPositions,
+        ServerViewReports, ServerManageReports, ServerManageReportForwarding,
         SubscriptionView, SubscriptionManage,
         OrganizationManageMembers, OrganizationManageRoles, OrganizationManageSettings,
         OrganizationSubmitTickets
@@ -180,6 +203,12 @@ public static class PermissionCatalog
             "See where players' bases are, and who is authorized on them. Owner by default."),
         new(ServerViewPositions, PermissionScope.Tenant, "Servers", DelegableByTenantAdmin: true,
             "See where players are and where they have been. Owner by default."),
+        new(ServerViewReports, PermissionScope.Tenant, "Servers", DelegableByTenantAdmin: true,
+            "Read the in-game (F7) reports players file, including attached screenshots. Owner by default."),
+        new(ServerManageReports, PermissionScope.Tenant, "Servers", DelegableByTenantAdmin: true,
+            "Review, action or dismiss in-game reports. Owner by default."),
+        new(ServerManageReportForwarding, PermissionScope.Tenant, "Servers", DelegableByTenantAdmin: true,
+            "See and rotate the address a game server sends its reports to. Owner by default."),
 
         new(SubscriptionView, PermissionScope.Tenant, "Billing", DelegableByTenantAdmin: true,
             "See the organization's plan, invoices and billing history."),
