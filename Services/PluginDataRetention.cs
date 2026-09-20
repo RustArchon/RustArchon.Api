@@ -10,33 +10,56 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RustArchon.Api.Data;
+using RustArchon.Api.Infrastructure.ObjectStorage;
 
 namespace RustArchon.Api.Services;
 
-/// <summary>Removes recorded plugin data that is older than the organization's plan keeps it.</summary>
+/// <summary>Removes recorded data that is older than the organization's plan keeps it.</summary>
 public interface IPluginDataRetention
 {
-    /// <summary>Deletes what is past retention as of <paramref name="now"/>. Returns how many chunks (combat and position) were removed.</summary>
+    /// <summary>
+    /// Deletes what is past retention as of <paramref name="now"/>: plugin chunks, console/chat and kill-feed events, stats snapshots,
+    /// and the pictures and rows of past wipes' maps. Returns how many database rows were removed.
+    /// </summary>
     Task<int> PruneAsync(DateTimeOffset now);
 }
 
 /// <inheritdoc cref="IPluginDataRetention" />
 /// <remarks>
 /// <para>
-/// Each organization keeps its plugin-recorded data for its current plan's <see cref="Plan.RetentionHistory"/> days.
-/// An organization with no current subscription, or a plan whose retention is not a positive number, is held to
+/// Each organization keeps its recorded data for its current plan's <see cref="Plan.RetentionHistory"/> days ("console/chat/player
+/// history"). An organization with no current subscription, or a plan whose retention is not a positive number, is held to
 /// <see cref="DefaultRetentionDays"/> - the shortest the catalog offers - so a missing or odd value can never mean
 /// "keep forever" (storage nobody is paying for) and never means "delete everything at once" either.
 /// </para>
 /// <para>
 /// A chunk is judged by the time of its <b>newest</b> event, so a chunk that still holds anything inside the window is
-/// kept whole. Deletion is permanent by design: this is the enforcement of the retention the plan advertises, and
-/// nothing else in the Api enforced it before this.
+/// kept whole. Deletion is permanent by design: this is the enforcement of the retention the plan advertises.
+/// </para>
+/// <para>
+/// A server's maps are judged differently: a wipe's map is the one thing a server always has, so the newest map row of each server
+/// is <b>never</b> removed, however old; earlier wipes' maps go once neither their last sighting nor their upload is inside the window.
+/// Their pictures (the original and the display copy) are deleted from storage first, and the row only when that worked, so a storage
+/// failure is retried on the next pass instead of leaving a picture nobody can find.
+/// </para>
+/// <para>
+/// Player sessions are deliberately not pruned here: they carry the geolocation, VPN and Steam ban lookups and the names the Panel
+/// shows for players, which are worth more than the storage they take. Deleting rows is done in batches, so the first pass over a table
+/// that has never been pruned does not hold one enormous transaction.
 /// </para>
 /// </remarks>
-public class PluginDataRetention(ApiDbContext context, ILogger<PluginDataRetention> logger) : IPluginDataRetention
+public class PluginDataRetention(ApiDbContext context, IObjectStorage storage, ILogger<PluginDataRetention> logger) : IPluginDataRetention
 {
     public const int DefaultRetentionDays = 30;
+
+    /// <summary>How many rows one DELETE removes. Big enough to be quick, small enough to keep the transaction and lock short.</summary>
+    public const int DeleteBatchSize = 5000;
+
+    /// <summary>
+    /// How long a spent or expired single-use token is kept before it is deleted: long enough to look into "the upload failed",
+    /// short enough not to pile up.
+    /// </summary>
+    public static readonly TimeSpan TokenGrace = TimeSpan.FromDays(1);
 
     public async Task<int> PruneAsync(DateTimeOffset now)
     {
@@ -49,6 +72,10 @@ public class PluginDataRetention(ApiDbContext context, ILogger<PluginDataRetenti
 
         var tenants = (await context.PluginCombatChunks.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .Union(await context.PluginPositionChunks.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
+            .Union(await context.RconEvents.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
+            .Union(await context.PlayerKillEvents.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
+            .Union(await context.ServerInfoSnapshots.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
+            .Union(await context.PluginMaps.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .ToList();
 
         var removed = 0;
@@ -57,28 +84,111 @@ public class PluginDataRetention(ApiDbContext context, ILogger<PluginDataRetenti
             var days = retention.TryGetValue(tenant, out var planDays) && planDays > 0 ? planDays : DefaultRetentionDays;
             var cutoff = now.AddDays(-days);
 
-            var count = await context.PluginCombatChunks.AcrossAllTenants()
-                .Where(c => c.TenantId == tenant && c.ToUtc < cutoff)
-                .ExecuteDeleteAsync();
+            removed += await DeleteOldAsync(
+                context.PluginCombatChunks.AcrossAllTenants().Where(c => c.TenantId == tenant && c.ToUtc < cutoff),
+                "combat chunks", days, tenant);
+            removed += await DeleteOldAsync(
+                context.PluginPositionChunks.AcrossAllTenants().Where(c => c.TenantId == tenant && c.ToUtc < cutoff),
+                "position chunks", days, tenant);
+            removed += await DeleteOldAsync(
+                context.RconEvents.AcrossAllTenants().Where(e => e.TenantId == tenant && e.CapturedAtUtc < cutoff),
+                "console and chat events", days, tenant);
+            removed += await DeleteOldAsync(
+                context.PlayerKillEvents.AcrossAllTenants().Where(e => e.TenantId == tenant && e.OccurredAtUtc < cutoff),
+                "kill feed events", days, tenant);
+            removed += await DeleteOldAsync(
+                context.ServerInfoSnapshots.AcrossAllTenants().Where(e => e.TenantId == tenant && e.CapturedAtUtc < cutoff),
+                "server stats snapshots", days, tenant);
+            removed += await PruneMapsAsync(tenant, cutoff, days);
+        }
 
-            if (count > 0)
+        removed += await PruneSpentTokensAsync(now - TokenGrace);
+        return removed;
+    }
+
+    private async Task<int> DeleteOldAsync<T>(IQueryable<T> old, string what, int days, Guid tenant) where T : class
+    {
+        var total = 0;
+        int batch;
+        do
+        {
+            batch = await old.Take(DeleteBatchSize).ExecuteDeleteAsync();
+            total += batch;
+        }
+        while (batch == DeleteBatchSize);
+
+        if (total > 0)
+        {
+            logger.LogInformation("Pruned {Count} {What} older than {Days} days for organization {TenantId}.", total, what, days, tenant);
+        }
+
+        return total;
+    }
+
+    /// <summary>Removes the maps of past wipes that are outside the window. Returns how many map rows went.</summary>
+    private async Task<int> PruneMapsAsync(Guid tenant, DateTimeOffset cutoff, int days)
+    {
+        var rows = await context.PluginMaps.AcrossAllTenants().AsNoTracking()
+            .Where(m => m.TenantId == tenant)
+            .Select(m => new MapRow(m.Id, m.RustServerId, m.LastSeenUtc, m.UploadedAtUtc, m.ObjectKey, m.PreviewObjectKey))
+            .ToListAsync();
+
+        var removed = 0;
+        foreach (var server in rows.GroupBy(r => r.RustServerId))
+        {
+            // The newest map of a server is the current world: never removed, whatever its age.
+            var current = server.OrderByDescending(r => r.LastSeenUtc).ThenByDescending(r => r.UploadedAtUtc).ThenBy(r => r.Id).First();
+            foreach (var old in server.Where(r => r.Id != current.Id && r.Newest < cutoff))
             {
-                logger.LogInformation("Pruned {Count} combat chunks older than {Days} days for organization {TenantId}.", count, days, tenant);
-                removed += count;
-            }
+                if (!await TryDeleteMapPicturesAsync(old))
+                {
+                    continue;     // left in place; the next pass tries again
+                }
 
-            var positionCount = await context.PluginPositionChunks.AcrossAllTenants()
-                .Where(c => c.TenantId == tenant && c.ToUtc < cutoff)
-                .ExecuteDeleteAsync();
-
-            if (positionCount > 0)
-            {
-                logger.LogInformation("Pruned {Count} position chunks older than {Days} days for organization {TenantId}.", positionCount, days, tenant);
-                removed += positionCount;
+                await context.PluginMapUploadTokens.AcrossAllTenants().Where(t => t.PluginMapId == old.Id).ExecuteDeleteAsync();
+                removed += await context.PluginMaps.AcrossAllTenants().Where(m => m.Id == old.Id).ExecuteDeleteAsync();
+                logger.LogInformation("Pruned a map from a past wipe (server {ServerId}) older than {Days} days for organization {TenantId}.", old.RustServerId, days, tenant);
             }
         }
 
         return removed;
+    }
+
+    private async Task<bool> TryDeleteMapPicturesAsync(MapRow map)
+    {
+        try
+        {
+            foreach (var key in new[] { map.ObjectKey, map.PreviewObjectKey }.Where(k => !string.IsNullOrEmpty(k)).Distinct())
+            {
+                await storage.DeleteAsync(key!);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not delete the pictures of an old map for server {ServerId}; it is kept and will be tried again.", map.RustServerId);
+            return false;
+        }
+    }
+
+    /// <summary>Removes upload and update tokens that expired more than <see cref="TokenGrace"/> ago. They are useless and only pile up.</summary>
+    private async Task<int> PruneSpentTokensAsync(DateTimeOffset expiredBefore)
+    {
+        var removed = await context.PluginMapUploadTokens.AcrossAllTenants().Where(t => t.ExpiresAtUtc < expiredBefore).ExecuteDeleteAsync();
+        removed += await context.PluginUpdateTokens.AcrossAllTenants().Where(t => t.ExpiresAtUtc < expiredBefore).ExecuteDeleteAsync();
+        if (removed > 0)
+        {
+            logger.LogInformation("Pruned {Count} expired plugin tokens.", removed);
+        }
+
+        return removed;
+    }
+
+    private sealed record MapRow(Guid Id, Guid RustServerId, DateTimeOffset LastSeenUtc, DateTimeOffset? UploadedAtUtc, string? ObjectKey, string? PreviewObjectKey)
+    {
+        /// <summary>The latest sign of life the map has: last reported by the plugin, or last uploaded.</summary>
+        public DateTimeOffset Newest => UploadedAtUtc is { } up && up > LastSeenUtc ? up : LastSeenUtc;
     }
 }
 
