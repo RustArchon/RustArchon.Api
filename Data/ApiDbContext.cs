@@ -135,6 +135,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<PluginMapUploadToken> PluginMapUploadTokens { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the PluginUpdateNotice DbSet - the newest update UpdateChecker has reported for each plugin on each server.
+    /// </summary>
+    public DbSet<PluginUpdateNotice> PluginUpdateNotices { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the Plan DbSet.
     /// </summary>
     public DbSet<Plan> Plans { get; set; } = null!;

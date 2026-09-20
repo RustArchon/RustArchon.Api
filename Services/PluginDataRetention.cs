@@ -19,7 +19,7 @@ public interface IPluginDataRetention
 {
     /// <summary>
     /// Deletes what is past retention as of <paramref name="now"/>: plugin chunks, console/chat and kill-feed events, stats snapshots,
-    /// and the pictures and rows of past wipes' maps. Returns how many database rows were removed.
+    /// plugin update notices not heard again, and the pictures and rows of past wipes' maps. Returns how many database rows were removed.
     /// </summary>
     Task<int> PruneAsync(DateTimeOffset now);
 }
@@ -76,6 +76,7 @@ public class PluginDataRetention(ApiDbContext context, IObjectStorage storage, I
             .Union(await context.PlayerKillEvents.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .Union(await context.ServerInfoSnapshots.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .Union(await context.PluginMaps.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
+            .Union(await context.PluginUpdateNotices.AcrossAllTenants().Select(c => c.TenantId).Distinct().ToListAsync())
             .ToList();
 
         var removed = 0;
@@ -99,6 +100,9 @@ public class PluginDataRetention(ApiDbContext context, IObjectStorage storage, I
             removed += await DeleteOldAsync(
                 context.ServerInfoSnapshots.AcrossAllTenants().Where(e => e.TenantId == tenant && e.CapturedAtUtc < cutoff),
                 "server stats snapshots", days, tenant);
+            removed += await DeleteOldAsync(
+                context.PluginUpdateNotices.AcrossAllTenants().Where(e => e.TenantId == tenant && e.ReportedAtUtc < cutoff),
+                "plugin update notices", days, tenant);
             removed += await PruneMapsAsync(tenant, cutoff, days);
         }
 

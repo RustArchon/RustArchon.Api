@@ -222,6 +222,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<PluginTcSnapshotCapturedConsumer>();
     x.AddConsumer<PluginPositionsCapturedConsumer>();
     x.AddConsumer<PluginMapStatusCapturedConsumer>();
+    x.AddConsumer<PluginUpdatesCapturedConsumer>();
     x.AddConsumer<ServerPluginSettingsChangedConsumer>();
     x.AddConsumer<WorkerDiagnosticLoggedConsumer>();
     x.AddConsumer<CommunicationDeliveredConsumer>();
