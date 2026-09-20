@@ -34,9 +34,48 @@ public sealed record PluginKeyInfo(
     int ServersReporting,
     DateTimeOffset? LastReportedUtc);
 
+/// <summary>An export: the bundle's text and a suggested file name. Never logged.</summary>
+public sealed record PluginKeyExport(string FileName, string Json, IReadOnlyList<string> Fingerprints);
+
+/// <summary>What importing does (or, for a dry run, would do) to one key.</summary>
+/// <param name="BundleState">Where the file says the key stands; null for a key here that the file does not mention.</param>
+/// <param name="Action">
+/// <c>added</c> (new here, kept in the history), <c>already_present</c>, <c>already_active</c>, <c>revoked</c> (it was
+/// retired here and the file has it revoked), <c>activated</c> (it becomes the active key), or <c>previous_active_retired</c>
+/// (it was the active key here and is kept in the history).
+/// </param>
+public sealed record PluginKeyImportItem(string Fingerprint, PluginKeyState? BundleState, string Action);
+
+/// <summary>The outcome of an import, or the plan for one.</summary>
+public sealed record PluginKeyImportResult(bool DryRun, IReadOnlyList<PluginKeyImportItem> Items, string? ActiveBefore, string? ActiveAfter)
+{
+    public bool ChangesActiveKey => ActiveAfter != ActiveBefore;
+    public bool ChangesAnything => Items.Any(i => i.Action is "added" or "revoked" or "activated" or "previous_active_retired");
+}
+
 /// <summary>Rotating and revoking the plugin signing key, and listing them all. Site Admin actions, all audit-logged.</summary>
 public interface IPluginKeyService
 {
+    /// <summary>
+    /// Every key this Panel holds, active and history, sealed into a passphrase-protected bundle (see <see cref="PluginKeyBundle"/>)
+    /// that can be backed up or imported into another Panel. Audit-logged. The bundle holds private keys: whoever has it and the
+    /// passphrase can sign code every server trusting these keys will run.
+    /// </summary>
+    /// <exception cref="PluginKeyOperationException"><c>passphrase_weak</c>, <c>key_unreadable</c> (a stored key cannot be decrypted, so nothing is exported).</exception>
+    Task<PluginKeyExport> ExportAsync(string passphrase, string actor);
+
+    /// <summary>
+    /// Merges a bundle's keys into this Panel's, by fingerprint. Keys new here are kept in the history (they can sign a bridge but
+    /// not new files); a key the file has revoked is revoked here too, and a key revoked here is never brought back; the active key
+    /// changes only when <paramref name="activateBundleKey"/> asks for it, and then through the same path as a rotation (the old
+    /// active key is kept). With <paramref name="dryRun"/> nothing is written and the plan is returned. All or nothing.
+    /// </summary>
+    /// <exception cref="PluginKeyOperationException">
+    /// <c>bundle_invalid</c>, <c>bundle_unreadable</c>, <c>bundle_keys_invalid</c>, <c>no_active_in_bundle</c>,
+    /// <c>cannot_activate_revoked</c>, <c>revoked_in_bundle_active_here</c>, <c>concurrent_change</c>, <c>key_unreadable</c>.
+    /// </exception>
+    Task<PluginKeyImportResult> ImportAsync(string bundleJson, string passphrase, bool activateBundleKey, bool dryRun, string actor, string? note);
+
     /// <summary>The active key first, then every retired or revoked key, most recently retired first.</summary>
     Task<IReadOnlyList<PluginKeyInfo>> ListAsync();
 
@@ -219,6 +258,283 @@ public class PluginKeyService(
         logger.LogWarning("Plugin signing key {Fingerprint} revoked by {Actor}: {Reason}", key.Fingerprint, actor, reason);
         var counts = (await statuses.SummarizeByKeyAsync()).ToDictionary(s => s.Fingerprint, StringComparer.OrdinalIgnoreCase);
         return Info(key.Fingerprint, key.State, key.RetiredAtUtc, key.RevokedAtUtc, key.RevokedReason, counts);
+    }
+
+    // ---- export and import ---------------------------------------------------------------------------------
+
+    public async Task<PluginKeyExport> ExportAsync(string passphrase, string actor)
+    {
+        if (!PluginKeyBundle.IsAcceptablePassphrase(passphrase))
+        {
+            throw new PluginKeyOperationException(
+                "passphrase_weak", $"The passphrase must be {PluginKeyBundle.MinPassphraseLength} to {PluginKeyBundle.MaxPassphraseLength} characters.");
+        }
+
+        await signing.GetPublicKeyAsync(); // a brand-new Panel has no key until first use: make it, so there is something to back up
+
+        var setting = await context.PlatformSettings.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Key == PlatformSettingsRegistry.PluginSigningKey)
+            ?? throw new PluginKeyOperationException("no_active_key", "The signing key setting does not exist.");
+        if (string.IsNullOrEmpty(setting.Value))
+        {
+            throw new PluginKeyOperationException("no_active_key", "There is no active key to export.");
+        }
+
+        var keys = new List<PluginKeyBundleKey> { ReadStored(setting.Value, PluginKeyState.Active, null, null, null) };
+        foreach (var h in await context.PluginKeyHistories.AsNoTracking().OrderBy(k => k.RetiredAtUtc).ToListAsync())
+        {
+            keys.Add(ReadStored(h.EncryptedPrivateKey, h.State, h.RetiredAtUtc, h.RevokedAtUtc, h.RevokedReason));
+        }
+
+        var now = clock.GetUtcNow();
+        var json = PluginKeyBundle.Seal(keys, passphrase, now);
+
+        context.PluginAdminEvents.Add(new PluginAdminEvent
+        {
+            AtUtc = now, Kind = PluginAdminEventKind.KeysExported, Subject = keys[0].Fingerprint, Actor = actor,
+            Detail = Trim($"{keys.Count} key(s): {string.Join(", ", keys.Select(k => k.Fingerprint))}")
+        });
+        await context.SaveChangesAsync();
+
+        logger.LogWarning("Plugin signing keys ({Count}) exported by {Actor}.", keys.Count, actor);
+        return new PluginKeyExport(
+            $"rustarchon-signing-keys-{keys[0].Fingerprint[..8]}-{now:yyyyMMdd-HHmmss}.json", json, keys.Select(k => k.Fingerprint).ToList());
+    }
+
+    public async Task<PluginKeyImportResult> ImportAsync(
+        string bundleJson, string passphrase, bool activateBundleKey, bool dryRun, string actor, string? note)
+    {
+        var bundle = PluginKeyBundle.Open(bundleJson, passphrase);
+
+        var setting = await context.PlatformSettings.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Key == PlatformSettingsRegistry.PluginSigningKey)
+            ?? throw new PluginKeyOperationException("no_active_key", "The signing key setting does not exist.");
+        var activeStored = setting.Value ?? "";
+        var activeFingerprint = string.IsNullOrEmpty(activeStored) ? null : FingerprintOfStored(activeStored);
+        var history = await context.PluginKeyHistories.ToListAsync();
+        var local = history.ToDictionary(h => h.Fingerprint, StringComparer.OrdinalIgnoreCase);
+
+        var bundleActive = bundle.FirstOrDefault(k => k.State == PluginKeyState.Active);
+        if (activateBundleKey && bundleActive is null)
+        {
+            throw new PluginKeyOperationException("no_active_in_bundle", "The file has no active key to make active here.");
+        }
+
+        if (activateBundleKey && local.TryGetValue(bundleActive!.Fingerprint, out var revokedHere) && revokedHere.State == PluginKeyState.Revoked)
+        {
+            throw new PluginKeyOperationException(
+                "cannot_activate_revoked", $"Key {bundleActive.Fingerprint} is revoked on this Panel and cannot be made active again.");
+        }
+
+        var activating = activateBundleKey && bundleActive is not null
+            && !string.Equals(bundleActive.Fingerprint, activeFingerprint, StringComparison.OrdinalIgnoreCase)
+            ? bundleActive
+            : null;
+
+        var items = new List<PluginKeyImportItem>();
+        var toAdd = new List<PluginKeyBundleKey>();
+        var toRevoke = new List<(PluginKeyHistory Row, PluginKeyBundleKey Key)>();
+        PluginKeyHistory? reactivated = null;
+
+        foreach (var k in bundle)
+        {
+            PluginKeyState? here = string.Equals(k.Fingerprint, activeFingerprint, StringComparison.OrdinalIgnoreCase)
+                ? PluginKeyState.Active
+                : local.TryGetValue(k.Fingerprint, out var row) ? row.State : null;
+
+            if (k.State == PluginKeyState.Revoked)
+            {
+                if (here == PluginKeyState.Active)
+                {
+                    throw new PluginKeyOperationException(
+                        "revoked_in_bundle_active_here",
+                        $"Key {k.Fingerprint} is revoked in the file but is the active key here. Rotate to a new key (revoking this one) first, then import.");
+                }
+
+                if (here == PluginKeyState.Retired)
+                {
+                    toRevoke.Add((local[k.Fingerprint], k));
+                    items.Add(new PluginKeyImportItem(k.Fingerprint, k.State, "revoked"));
+                }
+                else if (here is null)
+                {
+                    toAdd.Add(k);
+                    items.Add(new PluginKeyImportItem(k.Fingerprint, k.State, "added"));
+                }
+                else
+                {
+                    items.Add(new PluginKeyImportItem(k.Fingerprint, k.State, "already_present"));
+                }
+
+                continue;
+            }
+
+            if (activating is not null && k == activating)
+            {
+                if (here == PluginKeyState.Retired) { reactivated = local[k.Fingerprint]; }
+                items.Add(new PluginKeyImportItem(k.Fingerprint, k.State, "activated"));
+            }
+            else if (here == PluginKeyState.Active)
+            {
+                items.Add(new PluginKeyImportItem(
+                    k.Fingerprint, k.State, activating is not null ? "previous_active_retired" : "already_active"));
+            }
+            else if (here is not null)
+            {
+                items.Add(new PluginKeyImportItem(k.Fingerprint, k.State, "already_present"));
+            }
+            else
+            {
+                toAdd.Add(k);
+                items.Add(new PluginKeyImportItem(k.Fingerprint, k.State, "added"));
+            }
+        }
+
+        // The key that is active here and that the file does not mention still ends up in the history if it is being replaced.
+        if (activating is not null && activeFingerprint is not null
+            && !bundle.Any(b => string.Equals(b.Fingerprint, activeFingerprint, StringComparison.OrdinalIgnoreCase)))
+        {
+            items.Add(new PluginKeyImportItem(activeFingerprint, null, "previous_active_retired"));
+        }
+
+        var result = new PluginKeyImportResult(dryRun, items, activeFingerprint, activating?.Fingerprint ?? activeFingerprint);
+        if (dryRun || !result.ChangesAnything)
+        {
+            return result;
+        }
+
+        var now = clock.GetUtcNow();
+        await using var transaction = await context.Database.BeginTransactionAsync();
+
+        foreach (var k in toAdd)
+        {
+            var (modulus, exponent) = PublicHalfOfPlain(k.Pkcs8Base64);
+            var revoked = k.State == PluginKeyState.Revoked;
+            context.PluginKeyHistories.Add(new PluginKeyHistory
+            {
+                Fingerprint = k.Fingerprint,
+                ModulusBase64 = modulus,
+                ExponentBase64 = exponent,
+                EncryptedPrivateKey = protector.Protect(ApiKeyProtectorPurposes.PluginSigningKey, k.Pkcs8Base64),
+                State = revoked ? PluginKeyState.Revoked : PluginKeyState.Retired,
+                RetiredAtUtc = k.RetiredAtUtc ?? now,
+                RevokedAtUtc = revoked ? k.RevokedAtUtc ?? now : null,
+                RevokedReason = revoked ? k.RevokedReason ?? "Revoked in an imported bundle." : null
+            });
+        }
+
+        foreach (var (row, k) in toRevoke)
+        {
+            row.State = PluginKeyState.Revoked;
+            row.RevokedAtUtc = k.RevokedAtUtc ?? now;
+            row.RevokedReason = k.RevokedReason ?? "Revoked in an imported bundle.";
+        }
+
+        string? newStored = null;
+        if (activating is not null)
+        {
+            if (activeFingerprint is not null)
+            {
+                var (oldModulus, oldExponent) = PublicHalfOf(activeStored);
+                context.PluginKeyHistories.Add(new PluginKeyHistory
+                {
+                    Fingerprint = activeFingerprint, ModulusBase64 = oldModulus, ExponentBase64 = oldExponent,
+                    EncryptedPrivateKey = activeStored, State = PluginKeyState.Retired, RetiredAtUtc = now
+                });
+            }
+
+            if (reactivated is not null)
+            {
+                context.PluginKeyHistories.Remove(reactivated); // it is the active key now, so it leaves the history
+            }
+
+            newStored = protector.Protect(ApiKeyProtectorPurposes.PluginSigningKey, activating.Pkcs8Base64);
+        }
+
+        var added = toAdd.Count;
+        context.PluginAdminEvents.Add(new PluginAdminEvent
+        {
+            AtUtc = now, Kind = PluginAdminEventKind.KeysImported, Subject = result.ActiveAfter ?? "", Actor = actor,
+            Detail = Trim(
+                $"{added} added, {toRevoke.Count} revoked" + (activating is not null ? $", activated {activating.Fingerprint} (was {activeFingerprint ?? "none"})" : "")
+                + (string.IsNullOrWhiteSpace(note) ? "" : $". {note}"))
+        });
+
+        try
+        {
+            await context.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync();
+            context.ChangeTracker.Clear();
+            throw new PluginKeyOperationException("concurrent_change", "The signing keys changed while importing; nothing was changed. Try again.");
+        }
+
+        if (newStored is not null)
+        {
+            // Compare-and-swap, as for a rotation: only replace the active key if it is still the one we read.
+            var swapped = await context.PlatformSettings
+                .Where(s => s.Key == PlatformSettingsRegistry.PluginSigningKey && s.Value == activeStored)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.Value, newStored));
+            if (swapped != 1)
+            {
+                await transaction.RollbackAsync();
+                context.ChangeTracker.Clear();
+                throw new PluginKeyOperationException("concurrent_change", "The signing key changed while importing; nothing was changed. Try again.");
+            }
+        }
+
+        await transaction.CommitAsync();
+
+        foreach (var entry in context.ChangeTracker.Entries<PlatformSetting>().Where(e => e.Entity.Key == PlatformSettingsRegistry.PluginSigningKey).ToList())
+        {
+            await entry.ReloadAsync();
+        }
+
+        logger.LogWarning(
+            "Plugin signing keys imported by {Actor}: {Added} added, {Revoked} revoked{Activated}.",
+            actor, added, toRevoke.Count, activating is not null ? $", active key now {activating.Fingerprint}" : "");
+        return result;
+    }
+
+    // A stored key, decrypted and described for a bundle. An unreadable one stops the whole export: leaving it out would look like a backup and not be one.
+    private PluginKeyBundleKey ReadStored(string stored, PluginKeyState state, DateTimeOffset? retired, DateTimeOffset? revoked, string? reason)
+    {
+        try
+        {
+            var pkcs8 = protector.Unprotect(ApiKeyProtectorPurposes.PluginSigningKey, stored);
+            using var rsa = RSA.Create();
+            rsa.ImportPkcs8PrivateKey(Convert.FromBase64String(pkcs8), out _);
+            return new PluginKeyBundleKey(PluginKeyBundle.FingerprintOf(rsa), pkcs8, state, retired, revoked, reason);
+        }
+        catch (Exception ex) when (ex is not PluginKeyOperationException)
+        {
+            throw new PluginKeyOperationException(
+                "key_unreadable", "A stored signing key cannot be read, so nothing was exported: " + ex.GetType().Name);
+        }
+    }
+
+    private string FingerprintOfStored(string stored)
+    {
+        try
+        {
+            using var rsa = RSA.Create();
+            rsa.ImportPkcs8PrivateKey(Convert.FromBase64String(protector.Unprotect(ApiKeyProtectorPurposes.PluginSigningKey, stored)), out _);
+            return PluginKeyBundle.FingerprintOf(rsa);
+        }
+        catch (Exception ex)
+        {
+            throw new PluginKeyOperationException("key_unreadable", "The stored signing key cannot be read: " + ex.GetType().Name);
+        }
+    }
+
+    private static (string Modulus, string Exponent) PublicHalfOfPlain(string pkcs8Base64)
+    {
+        using var rsa = RSA.Create();
+        rsa.ImportPkcs8PrivateKey(Convert.FromBase64String(pkcs8Base64), out _);
+        var p = rsa.ExportParameters(false);
+        return (Convert.ToBase64String(p.Modulus!), Convert.ToBase64String(p.Exponent!));
     }
 
     private static PluginKeyInfo Info(

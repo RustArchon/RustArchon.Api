@@ -15,7 +15,9 @@ public enum PluginAdminEventKind
     KeyRevoked = 2,
     ReleaseUploaded = 3,
     ReleasePublished = 4,
-    ReleaseWithdrawn = 5
+    ReleaseWithdrawn = 5,
+    KeysExported = 6,
+    KeysImported = 7
 }
 
 /// <summary>
