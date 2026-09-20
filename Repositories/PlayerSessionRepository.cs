@@ -19,6 +19,31 @@ public class PlayerSessionRepository(ApiDbContext context, IUserContext? userCon
     : Repository<PlayerSession>(context, userContext), IPlayerSessionRepository
 {
     /// <inheritdoc />
+    public async Task<Dictionary<string, string>> GetLatestNamesAsync(Guid tenantId, Guid rustServerId, IReadOnlyCollection<string> steamIds)
+    {
+        ArgumentNullException.ThrowIfNull(steamIds);
+
+        var ids = steamIds.Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList();
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        // The newest named session of each player: a session with no newer named one for the same player. Stays on the server's own
+        // rows, which the (tenant, server, player) index covers.
+        var newest = await _dbSet.AcrossAllTenants().AsNoTracking()
+            .Where(s => s.TenantId == tenantId && s.RustServerId == rustServerId && ids.Contains(s.SteamId) && s.DisplayName != "")
+            .Where(s => !_dbSet.AcrossAllTenants().Any(o =>
+                o.TenantId == tenantId && o.RustServerId == rustServerId && o.SteamId == s.SteamId
+                && o.DisplayName != "" && o.ConnectedAtUtc > s.ConnectedAtUtc))
+            .Select(s => new { s.SteamId, s.DisplayName })
+            .ToListAsync();
+
+        // Two sessions can share a start time; either name will do.
+        return newest.GroupBy(n => n.SteamId).ToDictionary(g => g.Key, g => g.First().DisplayName);
+    }
+
+    /// <inheritdoc />
     public async Task<PagedResult<PlayerSession>> GetForServerAsync(
         Guid rustServerId, QueryOptions<PlayerSession> options, DateTimeOffset? since = null, DateTimeOffset? until = null)
     {

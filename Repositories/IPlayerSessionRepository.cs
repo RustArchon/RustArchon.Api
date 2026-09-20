@@ -62,6 +62,13 @@ public interface IPlayerSessionRepository : IRepository<PlayerSession>
     /// </summary>
     Task<PlayerDetailDto?> GetPlayerDetailAsync(Guid rustServerId, string steamId);
 
+    /// <summary>
+    /// The name each of these players used the last time they connected to this server, keyed by Steam id. Players with no session (or
+    /// only sessions with no name) are simply absent. Not tenant-filtered by ambient context: <paramref name="tenantId"/> is stated
+    /// explicitly, so this gives the same answer to a member and to a site admin acting as the organization.
+    /// </summary>
+    Task<Dictionary<string, string>> GetLatestNamesAsync(Guid tenantId, Guid rustServerId, IReadOnlyCollection<string> steamIds);
+
     /// <summary>One player's session history on this server, newest-connection-first.</summary>
     Task<PagedResult<PlayerSession>> GetSessionsForPlayerAsync(Guid rustServerId, string steamId, int pageNumber, int pageSize);
 }
