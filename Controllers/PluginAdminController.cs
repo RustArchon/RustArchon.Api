@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Claims;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -66,6 +67,58 @@ public class PluginAdminController(
         catch (PluginKeyOperationException ex) when (ex.Code == "not_found")
         {
             return NotFound();
+        }
+        catch (PluginKeyOperationException ex)
+        {
+            return Refused(ex.Code, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Exports every signing key into a passphrase-protected file (see <see cref="PluginKeyBundle"/>), for a backup or to carry to
+    /// another Panel. The response is the file; it is never cached. The passphrase and the file are never logged.
+    /// </summary>
+    [HttpPost("keys/export")]
+    public async Task<IActionResult> ExportKeys([FromBody] ExportPluginKeysRequestDto request)
+    {
+        try
+        {
+            var export = await keys.ExportAsync(request.Passphrase, Actor);
+            Response.Headers.CacheControl = "no-store";
+            return File(Encoding.UTF8.GetBytes(export.Json), "application/json", export.FileName);
+        }
+        catch (PluginKeyOperationException ex)
+        {
+            return Refused(ex.Code, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Imports an exported bundle, or with <c>DryRun</c> only reports what importing would do. Keys are added to the history; the
+    /// active key changes only if <c>ActivateBundleKey</c> is set.
+    /// </summary>
+    [HttpPost("keys/import")]
+    [RequestSizeLimit(PluginKeyBundle.MaxBundleBytes + 8192)]
+    public async Task<ActionResult<PluginKeyImportResultDto>> ImportKeys([FromBody] ImportPluginKeysRequestDto request)
+    {
+        try
+        {
+            var result = await keys.ImportAsync(
+                request.Bundle, request.Passphrase, request.ActivateBundleKey, request.DryRun, Actor, request.Note);
+            return Ok(new PluginKeyImportResultDto
+            {
+                DryRun = result.DryRun,
+                ActiveBefore = result.ActiveBefore,
+                ActiveAfter = result.ActiveAfter,
+                ChangesActiveKey = result.ChangesActiveKey,
+                ChangesAnything = result.ChangesAnything,
+                Items = result.Items.Select(i => new PluginKeyImportItemDto
+                {
+                    Fingerprint = i.Fingerprint,
+                    BundleState = i.BundleState?.ToString().ToLowerInvariant() ?? string.Empty,
+                    Action = i.Action
+                }).ToList()
+            });
         }
         catch (PluginKeyOperationException ex)
         {
