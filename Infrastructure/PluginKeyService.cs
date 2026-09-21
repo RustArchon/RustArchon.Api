@@ -25,6 +25,7 @@ public sealed class PluginKeyOperationException(string code, string message) : E
 /// information for the admin's decision: a server that is offline or behind reports nothing, so a low number never
 /// means it is safe to drop a key (nothing here ever does).
 /// </param>
+/// <param name="ActiveSinceUtc">For the active key only: when it became the active one (see <see cref="IPluginKeyService.GetReminderAsync"/>).</param>
 public sealed record PluginKeyInfo(
     string Fingerprint,
     PluginKeyState State,
@@ -32,7 +33,16 @@ public sealed record PluginKeyInfo(
     DateTimeOffset? RevokedAtUtc,
     string? RevokedReason,
     int ServersReporting,
-    DateTimeOffset? LastReportedUtc);
+    DateTimeOffset? LastReportedUtc,
+    DateTimeOffset? ActiveSinceUtc = null);
+
+/// <summary>Whether the active signing key has gone long enough without being rotated that an administrator is reminded.</summary>
+/// <param name="Fingerprint">The active key; null when there is none yet.</param>
+/// <param name="ActiveSinceUtc">When it became the active key; null when that cannot be told.</param>
+/// <param name="AgeDays">Whole days since <paramref name="ActiveSinceUtc"/>.</param>
+/// <param name="ReminderDays">The Platform Setting: how many days before the reminder; zero means the reminder is off.</param>
+/// <param name="Due">True when there is an active key, its age is known, the reminder is on, and the age has reached it.</param>
+public sealed record PluginKeyReminder(string? Fingerprint, DateTimeOffset? ActiveSinceUtc, int? AgeDays, int ReminderDays, bool Due);
 
 /// <summary>An export: the bundle's text and a suggested file name. Never logged.</summary>
 public sealed record PluginKeyExport(string FileName, string Json, IReadOnlyList<string> Fingerprints);
@@ -80,6 +90,15 @@ public interface IPluginKeyService
     Task<IReadOnlyList<PluginKeyInfo>> ListAsync();
 
     /// <summary>
+    /// Whether the active key is old enough that a site administrator should be reminded to consider rotating it (the Platform Setting
+    /// <see cref="PlatformSettingsRegistry.PluginKeyRotationReminderDays"/>, a year by default). The key's age counts from when it became the
+    /// active one: the latest rotation or import that replaced the one before it, else the moment it was first made (the audit log's
+    /// <see cref="PluginAdminEventKind.KeyGenerated"/> line), else - for a key made before that line existed - when its setting was first created,
+    /// which is close. Only ever a reminder: nothing rotates by itself, because rotating decides what every installed plugin will trust next.
+    /// </summary>
+    Task<PluginKeyReminder> GetReminderAsync();
+
+    /// <summary>
     /// Makes a new key the active one and retires the current one (kept, so servers still on it can be bridged).
     /// If <paramref name="revokeCurrent"/> the old key is revoked instead - for a suspected compromise - so there is
     /// still always exactly one active key. Returns the new active key.
@@ -124,12 +143,43 @@ public class PluginKeyService(
         var active = await signing.TryGetFingerprintAsync();
         if (active is not null)
         {
-            list.Add(Info(active, PluginKeyState.Active, null, null, null, counts));
+            list.Add(Info(active, PluginKeyState.Active, null, null, null, counts) with { ActiveSinceUtc = await ActiveSinceAsync() });
         }
 
         var old = await context.PluginKeyHistories.AsNoTracking().OrderByDescending(k => k.RetiredAtUtc).ToListAsync();
         list.AddRange(old.Select(k => Info(k.Fingerprint, k.State, k.RetiredAtUtc, k.RevokedAtUtc, k.RevokedReason, counts)));
         return list;
+    }
+
+    public async Task<PluginKeyReminder> GetReminderAsync()
+    {
+        var days = await context.PlatformSettings.AsNoTracking()
+            .Where(s => s.Key == PlatformSettingsRegistry.PluginKeyRotationReminderDays).Select(s => s.Value).FirstOrDefaultAsync();
+        var reminderDays = int.TryParse(days, out var parsed) && parsed >= 0 ? parsed : PlatformSettingsRegistry.DefaultPluginKeyRotationReminderDays;
+
+        var fingerprint = await signing.TryGetFingerprintAsync();
+        var since = fingerprint is null ? null : await ActiveSinceAsync();
+        int? ageDays = since is null ? null : Math.Max(0, (int)(clock.GetUtcNow() - since.Value).TotalDays);
+        var due = fingerprint is not null && ageDays is not null && reminderDays > 0 && ageDays >= reminderDays;
+
+        return new PluginKeyReminder(fingerprint, since, ageDays, reminderDays, due);
+    }
+
+    // When the active key became the active one - see IPluginKeyService.GetReminderAsync for the order of what is believed.
+    private async Task<DateTimeOffset?> ActiveSinceAsync()
+    {
+        var replaced = await context.PluginKeyHistories.AsNoTracking().Select(k => (DateTimeOffset?)k.RetiredAtUtc).MaxAsync();
+        var generated = await context.PluginAdminEvents.AsNoTracking()
+            .Where(e => e.Kind == PluginAdminEventKind.KeyGenerated).Select(e => (DateTimeOffset?)e.AtUtc).MaxAsync();
+
+        // A key that was rotated in came after the one it replaced; one that was generated came at its own moment: the later of the two is the active key's.
+        if (replaced is not null || generated is not null)
+        {
+            return replaced > generated || generated is null ? replaced : generated;
+        }
+
+        return await context.PlatformSettings.AsNoTracking()
+            .Where(s => s.Key == PlatformSettingsRegistry.PluginSigningKey).Select(s => (DateTimeOffset?)s.CreatedOn).FirstOrDefaultAsync();
     }
 
     public async Task<PluginKeyInfo> RotateAsync(string actor, string? note, bool revokeCurrent = false, string? revokeReason = null)
@@ -221,7 +271,7 @@ public class PluginKeyService(
 
         logger.LogWarning("Plugin signing key rotated by {Actor}: {Old} -> {New}{Revoked}.", actor, oldFingerprint, newFingerprint, revokeCurrent ? " (old key revoked)" : "");
 
-        return new PluginKeyInfo(newFingerprint, PluginKeyState.Active, null, null, null, 0, null);
+        return new PluginKeyInfo(newFingerprint, PluginKeyState.Active, null, null, null, 0, null, now);
     }
 
     public async Task<PluginKeyInfo> RevokeAsync(string fingerprint, string reason, string actor)

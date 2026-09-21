@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RustArchon.Api.Data;
@@ -11,9 +12,11 @@ using RustArchon.Api.Data;
 namespace RustArchon.Api.Migrations
 {
     [DbContext(typeof(ApiDbContext))]
-    partial class ApiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260920231540_AddPluginRolloutAndLoadFailures")]
+    partial class AddPluginRolloutAndLoadFailures
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2731,9 +2734,6 @@ namespace RustArchon.Api.Migrations
 
                     b.Property<string>("ReportsSecret")
                         .HasColumnType("text");
-
-                    b.Property<DateTimeOffset?>("SetupCompletedAtUtc")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("SteamApiKey")
                         .HasColumnType("text");

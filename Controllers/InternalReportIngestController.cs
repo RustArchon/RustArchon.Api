@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Repositories;
 using RustArchon.Api.Services;
 
@@ -35,13 +36,23 @@ public class InternalReportIngestController(
     IReportForwardingService forwarding,
     IReportIngestService ingest,
     IRustServerRepository servers,
-    IReportIngestThrottle throttle) : ControllerBase
+    IReportIngestThrottle throttle,
+    IPlatformSettingsCache settings) : ControllerBase
 {
     /// <summary>The header the Panel carries the secret in.</summary>
     public const string TokenHeader = "X-RustArchon-Report-Token";
 
     /// <summary>The most a report post may weigh. See the class remarks: abuse guard, not a screenshot cap.</summary>
     public const long MaxBytes = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// The limit the Panel applies per network address before a report post reaches this Api (a Platform Setting the Panel cannot read
+    /// itself). Not secret; reachable only with the internal-service key like everything on this controller.
+    /// </summary>
+    [HttpGet("limits")]
+    public async Task<ActionResult<ReportIngestLimitsResponse>> Limits() =>
+        new ReportIngestLimitsResponse(await settings.GetPositiveInt32Async(
+            PlatformSettingsRegistry.ReportsPerAddressPerMinute, PlatformSettingsRegistry.DefaultReportsPerAddressPerMinute));
 
     [HttpPost("{serverId:guid}")]
     [RequestSizeLimit(MaxBytes)]
@@ -68,7 +79,9 @@ public class InternalReportIngestController(
         }
 
         // Only a caller with a good secret can spend this server's budget.
-        if (!throttle.TryAcquire(serverId))
+        var perMinute = await settings.GetPositiveInt32Async(
+            PlatformSettingsRegistry.ReportsPerServerPerMinute, PlatformSettingsRegistry.DefaultReportsPerServerPerMinute);
+        if (!throttle.TryAcquire(serverId, perMinute))
         {
             return StatusCode(StatusCodes.Status429TooManyRequests);
         }
@@ -84,3 +97,7 @@ public class InternalReportIngestController(
         return NoContent();
     }
 }
+
+/// <summary>What the Panel's report door asks the Api for: how many posts one address may make per minute.</summary>
+public record ReportIngestLimitsResponse(int PerAddressPerMinute);
+

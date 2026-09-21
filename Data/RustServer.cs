@@ -149,6 +149,13 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     public bool PluginRecordingEnabled { get; set; } = true;
 
     /// <summary>
+    /// When the person adding this server got to the end of the Add Server wizard; <c>null</c> until then. A server that was already there when this
+    /// was added counts as complete from its creation date. It is what the servers list keys "Finish setup" on, so a half-added server is offered
+    /// its way back and a finished one (even one that is offline for a while) is not.
+    /// </summary>
+    public DateTimeOffset? SetupCompletedAtUtc { get; set; }
+
+    /// <summary>
     /// Gets or sets whether the optional RustArchon companion plugin should track combat (damage) on this
     /// server. On by default; a separate switch so the highest-volume hook can be turned off from the Panel
     /// if it ever proves costly. Desired state, reconciled like <see cref="PluginRecordingEnabled"/>.
@@ -156,19 +163,21 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     public bool PluginCombatLogEnabled { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets whether an admin may update the RustArchon plugin on this server from the Panel. <b>Off by
-    /// default</b> (unlike the two switches above): an update replaces code running with full server privileges, so it
-    /// is opt-in per server. Even when on, nothing updates by itself; an admin has to press Update, which mints a
-    /// single-use token and tells the Updater plugin to fetch and verify the new version.
+    /// Gets or sets whether the Panel may update the RustArchon plugin on this server. <b>On for a new server</b> (Scott, 2026-09-20),
+    /// with the reasons stated where the person adds it, and one click to turn off; a server that already existed keeps the value it had
+    /// (the column's own default is still off, so no migration turned anything on for anyone). An update replaces code running with
+    /// full server privileges, so what it allows is narrow: only a file signed by the key that server's plugin already trusts is accepted, and
+    /// the previous version is put back if the new one does not start. An update is a single-use token and a request to the Updater plugin.
     /// </summary>
-    public bool PluginUpdatesEnabled { get; set; }
+    public bool PluginUpdatesEnabled { get; set; } = true;
 
     /// <summary>
     /// Gets or sets whether the Panel updates the plugin and its Updater on this server <b>by itself</b> when a newer version is being
-    /// served (see <c>PluginAutoUpdater</c>). Off by default, and never on while <see cref="PluginUpdatesEnabled"/> is off: it only
-    /// carries out what an administrator could have done by pressing the buttons, so it changes nothing about what is trusted or checked.
+    /// served (see <c>PluginAutoUpdater</c>). On for a new server, like <see cref="PluginUpdatesEnabled"/>, and never on while that is off:
+    /// it only carries out what an administrator could have done by pressing the buttons, so it changes nothing about what is trusted or
+    /// checked. The site-wide "Automatic plugin updates" setting can stop every server's at once.
     /// </summary>
-    public bool PluginAutoUpdateEnabled { get; set; }
+    public bool PluginAutoUpdateEnabled { get; set; } = true;
 
     /// <summary>
     /// Gets or sets the secret in this server's report-forwarding address, encrypted at rest (ADR-0001). <c>null</c> until an

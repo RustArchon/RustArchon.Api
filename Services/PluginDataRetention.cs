@@ -44,7 +44,8 @@ public interface IPluginDataRetention
 /// </para>
 /// <para>
 /// Player sessions are deliberately not pruned here: they carry the geolocation, VPN and Steam ban lookups and the names the Panel
-/// shows for players, which are worth more than the storage they take. Deleting rows is done in batches, so the first pass over a table
+/// shows for players, which are worth more than the storage they take. Decision (Scott, 2026-09-20): they are kept for as long as the server
+/// is; that history is the point of the service and is disclosed in the privacy policy, so the plan's "player history" days do not apply to them. Deleting rows is done in batches, so the first pass over a table
 /// that has never been pruned does not hold one enormous transaction.
 /// </para>
 /// </remarks>

@@ -90,6 +90,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<ServerPlugin> ServerPlugins { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the PluginLoadFailure DbSet - the reasons plugin files on a server did not load, as Carbon reports them.
+    /// </summary>
+    public DbSet<PluginLoadFailure> PluginLoadFailures { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the ServerPluginStatus DbSet.
     /// </summary>
     public DbSet<ServerPluginStatus> ServerPluginStatuses { get; set; } = null!;
@@ -113,6 +118,11 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// Gets or sets the PluginRelease DbSet - plugin source files uploaded for delivery.
     /// </summary>
     public DbSet<PluginRelease> PluginReleases { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginRollout DbSet - when each plugin or Updater version began its staged roll-out.
+    /// </summary>
+    public DbSet<PluginRollout> PluginRollouts { get; set; } = null!;
 
     /// <summary>
     /// Gets or sets the PluginCombatChunk DbSet - batches of combat events drained from the RustArchon plugin.

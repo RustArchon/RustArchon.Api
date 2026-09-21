@@ -851,6 +851,29 @@ public class RustServersController
     }
 
     /// <summary>
+    /// Records that the Add Server wizard was finished for this server. Idempotent: the first call stamps the time, later calls change nothing.
+    /// Returns the server. Separate from <see cref="Update"/> so an ordinary edit can never set or clear it.
+    /// </summary>
+    [HttpPost("{id}/setup-complete")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Update")]
+    public async Task<ActionResult<RustServerDto>> CompleteSetup(Guid id)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        if (entity.SetupCompletedAtUtc is null)
+        {
+            entity.SetupCompletedAtUtc = DateTimeOffset.UtcNow;
+            entity = await _repository.UpdateAsync(entity);
+        }
+
+        return Ok(_mapper.Map<RustServerDto>(entity));
+    }
+
+    /// <summary>
     /// Saves the RustArchon plugin's two switches (Recording, Combat log) for this server and, if either actually
     /// changed, tells the plugin so right away - see <see cref="ServerPluginSettingsChanged"/>. Returns the
     /// server. Separate from <see cref="Update"/> on purpose: that is a full-record PUT, and these switches must

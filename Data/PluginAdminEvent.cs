@@ -17,7 +17,16 @@ public enum PluginAdminEventKind
     ReleasePublished = 4,
     ReleaseWithdrawn = 5,
     KeysExported = 6,
-    KeysImported = 7
+    KeysImported = 7,
+
+    /// <summary>The deployment's first signing key was made (the first time the plugin was downloaded). Actor is "system".</summary>
+    KeyGenerated = 8,
+
+    /// <summary>An administrator had a one-off file signed with the active key and downloaded it, without publishing it.</summary>
+    FileSigned = 9,
+
+    /// <summary>An administrator downloaded a stored release signed with the active key, to test it before (or without) publishing it.</summary>
+    ReleaseSigned = 10
 }
 
 /// <summary>
