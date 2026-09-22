@@ -34,6 +34,10 @@ public class PlanMappingProfile : EntityMappingProfile<Plan, PlanDto, CreatePlan
         // - PlansController sets it explicitly on the mapped DTO, not AutoMapper.
         entityMap.ForMember(dest => dest.SubscriberCount, opt => opt.Ignore());
 
+        // Which plan replaced this one is recorded only by PlansController.Supersede; no create or edit body can set or clear it.
+        createMap.ForMember(dest => dest.SupersededByPlanId, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.SupersededByPlanId, opt => opt.Ignore());
+
         // Name is fixed at creation and never edited in place - see UpdatePlanDto's remarks. ColorCode
         // maps by convention (UpdatePlanDto has its own ColorCode property) - it's the one field
         // that's freely editable regardless of subscriber count.

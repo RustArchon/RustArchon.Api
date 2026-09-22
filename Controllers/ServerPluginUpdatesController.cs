@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Repositories;
+using RustArchon.Api.Services;
 using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Controllers;
@@ -27,7 +28,8 @@ namespace RustArchon.Api.Controllers;
 [Authorize]
 [RequirePermission(PermissionCatalog.ServerGet)]
 public class ServerPluginUpdatesController(
-    IRustServerRepository servers, IPluginUpdateNoticeRepository notices, IServerPluginRepository plugins) : ControllerBase
+    IRustServerRepository servers, IPluginUpdateNoticeRepository notices, IServerPluginRepository plugins,
+    IPluginDownloadLookupRepository downloads) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<List<PluginUpdateNoticeDto>>> Get(Guid id)
@@ -47,6 +49,10 @@ public class ServerPluginUpdatesController(
             .GroupBy(p => PluginUpdateNoticeRepository.Normalize(p.Name))
             .ToDictionary(g => g.Key, g => g.First());
 
+        // The direct download addresses already found for these plugins - by the platform's lookup job, shared by every server, so reading
+        // them is one query and never a call to anyone. Only the ones asked for at exactly this notice's version and marketplace count.
+        var found = await downloads.GetFoundForNamesAsync(held.Select(n => n.NormalizedName).Distinct().ToList());
+
         var result = new List<PluginUpdateNoticeDto>();
         foreach (var notice in held)
         {
@@ -62,6 +68,7 @@ public class ServerPluginUpdatesController(
                 ReportedVersion = notice.CurrentVersion,
                 LatestVersion = notice.LatestVersion,
                 Url = SafeUrl(notice.Url),
+                DownloadUrl = DownloadUrlFor(notice, found),
                 Marketplace = notice.Marketplace,
                 FirstSeenUtc = notice.FirstSeenUtc,
                 LastSeenUtc = notice.LastSeenUtc,
@@ -70,6 +77,18 @@ public class ServerPluginUpdatesController(
         }
 
         return Ok(result);
+    }
+
+    /// <summary>
+    /// The address found for this notice's plugin at its newest version on its marketplace, or empty. Checked again here, not only when it
+    /// was stored: what goes to a page is decided by the rules as they are now, so tightening them takes effect on what is already held.
+    /// </summary>
+    private static string DownloadUrlFor(PluginUpdateNotice notice, IReadOnlyList<PluginDownloadLookup> found)
+    {
+        var marketplaceKey = PluginDownloadMatcher.MarketplaceKey(notice.Marketplace);
+        var version = PluginDownloadMatcher.VersionKey(notice.LatestVersion);
+        var row = found.FirstOrDefault(l => l.NormalizedName == notice.NormalizedName && l.MarketplaceKey == marketplaceKey && l.Version == version);
+        return PluginDownloadMatcher.SafeDownloadUrl(row?.DownloadUrl, marketplaceKey) ?? string.Empty;
     }
 
     /// <summary>

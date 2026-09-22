@@ -49,7 +49,8 @@ public static class PlanSeeder
             BuildPlan("Wood", "#b08553", 0.00m, retentionDays: 30, hasRoles: false, maxServers: 1, maxUsers: 1, now, onePerOwner: true, monthlyOnly: true),
             BuildPlan("Stone", "#9a988c", 5.00m, retentionDays: 60, hasRoles: false, maxServers: 1, maxUsers: 2, now),
             BuildPlan("Metal", "#7e94a6", 15.00m, retentionDays: 90, hasRoles: false, maxServers: 5, maxUsers: 10, now),
-            BuildPlan("HQM", "#4fc3d9", 29.95m, retentionDays: 265, hasRoles: true, maxServers: 10, maxUsers: 20, now));
+            // HQM is the only seeded tier that offers automatic third-party plugin updates: Scott plans that as an HQM differentiator (2026-09-21).
+            BuildPlan("HQM", "#4fc3d9", 29.95m, retentionDays: 265, hasRoles: true, maxServers: 10, maxUsers: 20, now, offersThirdPartyPluginUpdates: true));
 
         await dbContext.SaveChangesAsync();
 
@@ -68,13 +69,14 @@ public static class PlanSeeder
     private static Plan BuildPlan(
         string name, string colorCode, decimal monthlyPrice, int retentionDays, bool hasRoles,
         int maxServers, int maxUsers, DateTimeOffset now, bool onePerOwner = false,
-        bool monthlyOnly = false) => new()
+        bool monthlyOnly = false, bool offersThirdPartyPluginUpdates = false) => new()
     {
         Name = name,
         ColorCode = colorCode,
         PricingModel = PricingModel.Flat,
         RetentionHistory = retentionDays,
         HasRoles = hasRoles,
+        OffersThirdPartyPluginUpdates = offersThirdPartyPluginUpdates,
         OnePerOwner = onePerOwner,
         MaximumServers = maxServers,
         MaximumUsers = maxUsers,

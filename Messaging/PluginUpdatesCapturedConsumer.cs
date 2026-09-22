@@ -3,8 +3,10 @@
 using System;
 using System.Threading.Tasks;
 using MassTransit;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using RustArchon.Api.Data;
+using RustArchon.Api.Hubs;
 using RustArchon.Api.Repositories;
 using RustArchon.Messaging.Contracts;
 
@@ -15,8 +17,14 @@ namespace RustArchon.Api.Messaging;
 /// (so the record survives even if the row is later replaced). A report that cannot be stored is logged and dropped, not retried: the
 /// Worker reports again whenever the list changes.
 /// </summary>
+/// <remarks>
+/// When a notice is new, or moves to a newer version, the server's watchers are told so (the Plugins tab's chip re-reads). A repeat of
+/// what is already held only refreshes its times and says nothing: the Worker reports again on every change, and a chip that refreshed
+/// for each would do so for no reason.
+/// </remarks>
 public class PluginUpdatesCapturedConsumer(
     IPluginUpdateNoticeRepository notices,
+    IHubContext<RconHub> hub,
     TimeProvider clock,
     ILogger<PluginUpdatesCapturedConsumer> logger) : IConsumer<PluginUpdatesCaptured>
 {
@@ -41,10 +49,29 @@ public class PluginUpdatesCapturedConsumer(
             {
                 Log(message.ServerId, notice, "Newer");
             }
+
+            if (changes.Added.Count + changes.Advanced.Count > 0)
+            {
+                await TellWatchersAsync(message.ServerId);
+            }
         }
         catch (InvalidOperationException ex)
         {
             logger.LogWarning(ex, "Dropped a plugin update report from server {ServerId}.", message.ServerId);
+        }
+    }
+
+    // Only "something changed" goes down the hub, never the notice: the Panel re-reads through the endpoint, which checks the permission.
+    // Failing to say so must not undo a notice that is already stored.
+    private async Task TellWatchersAsync(Guid serverId)
+    {
+        try
+        {
+            await hub.Clients.Group(RconHub.GroupName(serverId)).SendAsync("ReceivePluginUpdatesChanged");
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Telling watchers of server {ServerId} about a plugin update failed; it is stored regardless.", serverId);
         }
     }
 

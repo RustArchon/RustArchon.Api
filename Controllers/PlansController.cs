@@ -142,7 +142,8 @@ public class PlansController : ControllerBase
     /// billed, and the admin page routes to <see cref="Supersede"/> instead. This endpoint itself
     /// doesn't block on it (an admin fixing a genuine data-entry mistake on an already-used Plan is
     /// still a legitimate, if unusual, thing to do). If <see cref="UpdatePlanDto.Active"/> is
-    /// <c>true</c>, any other currently-active Plan with the same Name is deactivated first.
+    /// <c>true</c>, any other currently-active Plan with the same Name is deactivated first. A plan that a newer
+    /// version replaced (<see cref="Plan.SupersededByPlanId"/>) is not edited at all - 409 - since the newer version is the one to change.
     /// </summary>
     [HttpPut("{id}")]
     public async Task<ActionResult<PlanDto>> Update(Guid id, [FromBody] UpdatePlanDto updateDto)
@@ -156,6 +157,12 @@ public class PlansController : ControllerBase
         if (entity == null)
         {
             return NotFound();
+        }
+
+        // A plan a newer version replaced is history and is not edited at all - not its terms, and not switched back on. The newer version is.
+        if (entity.SupersededByPlanId is not null)
+        {
+            return Conflict(new { message = ReplacedMessage });
         }
 
         if (updateDto.Active)
@@ -172,6 +179,41 @@ public class PlansController : ControllerBase
             id, ToPrices(updateDto.Prices, updateDto.PricingModel, updateDto.MaximumServers));
 
         var refreshed = await _repository.GetByIdAsync(id, null) ?? updated;
+        return Ok(await ToDtoAsync(refreshed));
+    }
+
+    /// <summary>
+    /// Switches a Plan on or off - and touches nothing else, whether or not anyone has ever been on it. Whether a plan is offered to new
+    /// sign-ups is not one of the terms a subscriber signed up under, so it does not need <see cref="Supersede"/>: doing that for a bare
+    /// on/off would leave an identical copy of the plan behind. Current subscribers stay on the plan either way. Turning a plan on turns off
+    /// any other active plan with the same Name first (at most one may be active per Name). A plan that was <em>replaced</em> by a newer version
+    /// (<see cref="Plan.SupersededByPlanId"/>) cannot be switched back on - its newer version is the one to offer - so that is a 409; a plan that
+    /// was only deactivated can be reactivated.
+    /// </summary>
+    [HttpPut("{id}/active")]
+    public async Task<ActionResult<PlanDto>> SetActive(Guid id, [FromBody] SetPlanActiveDto dto)
+    {
+        var entity = await _repository.GetWithPricesAsync(id);
+        if (entity == null)
+        {
+            return NotFound();
+        }
+
+        if (dto.Active && entity.SupersededByPlanId is not null)
+        {
+            return Conflict(new { message = ReplacedMessage });
+        }
+
+        if (dto.Active)
+        {
+            await _repository.DeactivateOtherActiveAsync(entity.Name, excludePlanId: id);
+        }
+
+        entity.Active = dto.Active;
+        await _repository.UpdateAsync(entity);
+
+        // With its prices, so the answer describes the whole plan and not a plan that appears to have none.
+        var refreshed = await _repository.GetWithPricesAsync(id) ?? entity;
         return Ok(await ToDtoAsync(refreshed));
     }
 
@@ -199,26 +241,46 @@ public class PlansController : ControllerBase
             return NotFound();
         }
 
+        // A version that was already replaced is not the one to build on: superseding it again would fork the chain and leave the current version
+        // orphaned. The newer version is what to edit.
+        if (oldPlan.SupersededByPlanId is not null)
+        {
+            return Conflict(new { message = ReplacedMessage });
+        }
+
         await _repository.DeactivateOtherActiveAsync(oldPlan.Name, excludePlanId: null);
 
         // The new row gets its own PlanPrice rows rather than sharing the old plan's: prices are what a
         // subscriber signed up under, so the superseded plan has to keep its own copy untouched.
-        var newPlan = await _repository.AddAsync(new Plan
-        {
-            Name = oldPlan.Name,
-            ColorCode = supersedeDto.ColorCode,
-            PricingModel = supersedeDto.PricingModel,
-            RetentionHistory = supersedeDto.RetentionHistory,
-            HasRoles = supersedeDto.HasRoles,
-            OnePerOwner = supersedeDto.OnePerOwner,
-            MaximumServers = supersedeDto.MaximumServers,
-            MaximumUsers = supersedeDto.MaximumUsers,
-            Active = true,
-            Prices = ToPrices(supersedeDto.Prices, supersedeDto.PricingModel, supersedeDto.MaximumServers)
-        });
+        var newPlan = await _repository.AddAsync(NewVersion(oldPlan.Name, supersedeDto));
+
+        // The record of what replaced what. Written here and nowhere else.
+        oldPlan.SupersededByPlanId = newPlan.Id;
+        await _repository.UpdateAsync(oldPlan);
 
         return Ok(await ToDtoAsync(newPlan));
     }
+
+    /// <summary>
+    /// The plan a supersede creates, from the terms in the request. One place, so what the supersede <em>preview</em> judges is exactly what the supersede
+    /// then creates.
+    /// </summary>
+    public static Plan NewVersion(string name, SupersedePlanDto dto) => new()
+    {
+        Name = name,
+        ColorCode = dto.ColorCode,
+        PricingModel = dto.PricingModel,
+        RetentionHistory = dto.RetentionHistory,
+        HasRoles = dto.HasRoles,
+        OffersThirdPartyPluginUpdates = dto.OffersThirdPartyPluginUpdates,
+        OnePerOwner = dto.OnePerOwner,
+        MaximumServers = dto.MaximumServers,
+        MaximumUsers = dto.MaximumUsers,
+        Active = true,
+        Prices = ToPrices(dto.Prices, dto.PricingModel, dto.MaximumServers)
+    };
+
+    private const string ReplacedMessage = "This plan was replaced by a newer version. Work with the newer version instead.";
 
     /// <summary>
     /// Permanently removes a Plan created by mistake - only one no Organization has ever been on.
@@ -241,6 +303,17 @@ public class PlansController : ControllerBase
         if (subscriberCount > 0)
         {
             return Conflict($"This plan has been used by {subscriberCount} organization(s) and can't be deleted. Deactivate it instead.");
+        }
+
+        // If this plan replaced an older one, that one is no longer replaced by anything (and so can be reactivated).
+        await _repository.ClearSupersededByAsync(id);
+
+        // Deleting is a soft delete: the row stays, and the unique index that allows one active plan per name still counts an active row. Switched off
+        // first, so a deleted plan can never stand in the way of another of its name being activated or created.
+        if (entity.Active)
+        {
+            entity.Active = false;
+            await _repository.UpdateAsync(entity);
         }
 
         await _repository.DeleteAsync(id);

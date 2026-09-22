@@ -32,7 +32,16 @@ public static class EmailTemplateRenderer
     /// instead of a quietly wrong one.
     /// </remarks>
     public static (string Subject, string HtmlBody) Render(
-        string subject, string htmlBody, IReadOnlyDictionary<string, string> tokens)
+        string subject, string htmlBody, IReadOnlyDictionary<string, string> tokens) =>
+        Render(subject, htmlBody, tokens, rawHtmlTokens: null);
+
+    /// <summary>
+    /// As <see cref="Render(string, string, IReadOnlyDictionary{string, string})"/>, except the tokens named in <paramref name="rawHtmlTokens"/> are put
+    /// into the body <b>as they are</b>, not encoded: their value is already markup. Only ever for markup the platform itself built safely (see
+    /// <see cref="AnnouncementBody.ToHtml"/>) - never for a value that came from a person or another system unchecked.
+    /// </summary>
+    public static (string Subject, string HtmlBody) Render(
+        string subject, string htmlBody, IReadOnlyDictionary<string, string> tokens, IReadOnlySet<string>? rawHtmlTokens)
     {
         ArgumentNullException.ThrowIfNull(subject);
         ArgumentNullException.ThrowIfNull(htmlBody);
@@ -42,7 +51,8 @@ public static class EmailTemplateRenderer
         {
             var placeholder = $"{{{{{key}}}}}";
             subject = subject.Replace(placeholder, value, StringComparison.Ordinal);
-            htmlBody = htmlBody.Replace(placeholder, WebUtility.HtmlEncode(value), StringComparison.Ordinal);
+            htmlBody = htmlBody.Replace(
+                placeholder, rawHtmlTokens is not null && rawHtmlTokens.Contains(key) ? value : WebUtility.HtmlEncode(value), StringComparison.Ordinal);
         }
 
         return (subject, htmlBody);

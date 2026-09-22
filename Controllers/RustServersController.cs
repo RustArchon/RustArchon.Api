@@ -16,6 +16,7 @@ using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Repositories;
+using RustArchon.Api.Services;
 using RustArchon.Messaging.Contracts;
 using RustArchon.Shared.DTOs;
 
@@ -51,6 +52,7 @@ public class RustServersController
     private readonly IPluginScriptService _pluginScriptService;
     private readonly IPluginUpdateService _pluginUpdateService;
     private readonly ISubscriptionRepository _subscriptionRepository;
+    private readonly IServerPollService _serverPollService;
 
     public RustServersController(
         IRustServerRepository repository,
@@ -71,7 +73,8 @@ public class RustServersController
         IServerPluginStatusRepository serverPluginStatusRepository,
         IPluginScriptService pluginScriptService,
         IPluginUpdateService pluginUpdateService,
-        ISubscriptionRepository subscriptionRepository)
+        ISubscriptionRepository subscriptionRepository,
+        IServerPollService serverPollService)
         : base(repository, mapper, logger, correlationContext)
     {
         _rconCredentialProtector = rconCredentialProtector ?? throw new ArgumentNullException(nameof(rconCredentialProtector));
@@ -89,6 +92,7 @@ public class RustServersController
         _pluginScriptService = pluginScriptService ?? throw new ArgumentNullException(nameof(pluginScriptService));
         _pluginUpdateService = pluginUpdateService ?? throw new ArgumentNullException(nameof(pluginUpdateService));
         _subscriptionRepository = subscriptionRepository ?? throw new ArgumentNullException(nameof(subscriptionRepository));
+        _serverPollService = serverPollService ?? throw new ArgumentNullException(nameof(serverPollService));
     }
 
     /// <summary>
@@ -702,6 +706,35 @@ public class RustServersController
         var plugins = await _serverPluginRepository.GetForServerAsync(id);
         return Ok(_mapper.Map<IEnumerable<ServerPluginDto>>(plugins));
     }
+
+    /// <summary>
+    /// Asks the server to be polled right now - the installed plugin list, the RustArchon plugin's handshake if it is listed, and its UpdateChecker
+    /// notices if it reports that capability - instead of waiting for the Worker's own few-minute schedule. Used by the Plugins tab's Refresh button,
+    /// so what a person sees after clicking it reflects the server within seconds. Never a hard failure: every way this can fail to happen (the
+    /// server is not connected, no Worker owns it right now, or it was asked too recently) comes back as an ordinary <see cref="ServerPollResultDto"/>
+    /// a caller can read straight through to its own next read of the stored data - see that DTO's remarks.
+    /// </summary>
+    [HttpPost("{id}/plugins/poll")]
+    [JumpStart.Repositories.EntityAuthorize(action: "Get")]
+    public async Task<ActionResult<ServerPollResultDto>> PollPluginsNow(Guid id)
+    {
+        var entity = await _repository.GetByIdAsync(id, null);
+        if (entity is null)
+        {
+            return NotFound();
+        }
+
+        var outcome = await _serverPollService.PollNowAsync(id, [PollServerNowKinds.Plugins, PollServerNowKinds.Updates]);
+        return Ok(new ServerPollResultDto { Outcome = OutcomeText(outcome) });
+    }
+
+    private static string OutcomeText(ServerPollOutcome outcome) => outcome switch
+    {
+        ServerPollOutcome.Polled => "polled",
+        ServerPollOutcome.NotConnected => "not_connected",
+        ServerPollOutcome.NoWorker => "no_worker",
+        _ => "rate_limited"
+    };
 
     /// <summary>
     /// The RustArchon companion plugin script, with this deployment's public signing key stamped in and a signature

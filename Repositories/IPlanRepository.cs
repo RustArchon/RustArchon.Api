@@ -57,6 +57,20 @@ public interface IPlanRepository : IRepository<Plan>
     Task<List<Plan>> GetAllOrderedAsync();
 
     /// <summary>
+    /// The newest version of a plan: follows <see cref="Plan.SupersededByPlanId"/> from this plan to the end of the chain and returns the last one (the
+    /// plan itself when nothing replaced it), with its prices. <c>null</c> if there is no such plan. Bounded, so a cycle that should never exist
+    /// cannot loop: it stops at the first row it has already seen.
+    /// </summary>
+    Task<Plan?> GetLatestVersionAsync(Guid planId);
+
+    /// <summary>
+    /// Clears <see cref="Plan.SupersededByPlanId"/> on whatever pointed at this plan. Called when this plan is deleted: deletion is a soft delete, so the
+    /// database's own "set null on delete" never fires, and without this the older plan would stay marked as replaced by a plan that no longer exists
+    /// (and so could never be reactivated). Returns how many were cleared.
+    /// </summary>
+    Task<int> ClearSupersededByAsync(Guid planId);
+
+    /// <summary>
     /// Replaces this Plan's price rows wholesale with <paramref name="prices"/>.
     /// </summary>
     /// <remarks>

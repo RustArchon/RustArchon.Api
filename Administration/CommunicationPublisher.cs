@@ -19,7 +19,8 @@ namespace RustArchon.Api.Administration;
 /// <inheritdoc cref="ICommunicationPublisher" />
 public class CommunicationPublisher(
     ICommunicationRepository communications, IEmailTemplateRepository emailTemplates,
-    IPublishEndpoint publishEndpoint, IConfiguration configuration, IPlatformSettingsCache settingsCache)
+    IPublishEndpoint publishEndpoint, IConfiguration configuration, IPlatformSettingsCache settingsCache,
+    Services.IUserProfileStore userProfiles)
     : ICommunicationPublisher
 {
     /// <inheritdoc />
@@ -33,12 +34,30 @@ public class CommunicationPublisher(
     }
 
     /// <inheritdoc />
-    public async Task<Guid> QueueTemplatedAsync(
+    public Task<Guid> QueueTemplatedAsync(
         string templateCode, IReadOnlyDictionary<string, string> tokens, string toAddress, Guid? userId,
-        Guid? tenantId, string? culture = null, CancellationToken cancellationToken = default)
+        Guid? tenantId, string? culture = null, CancellationToken cancellationToken = default) =>
+        QueueTemplatedInternalAsync(templateCode, tokens, rawHtmlTokens: null, toAddress, userId, tenantId, culture, batchId: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<Guid> QueueTemplatedWithMarkupAsync(
+        string templateCode, IReadOnlyDictionary<string, string> tokens, IReadOnlySet<string> rawHtmlTokens, string toAddress, Guid? userId,
+        Guid? tenantId, string? culture = null, Guid? batchId = null, CancellationToken cancellationToken = default) =>
+        QueueTemplatedInternalAsync(templateCode, tokens, rawHtmlTokens, toAddress, userId, tenantId, culture, batchId, cancellationToken);
+
+    private async Task<Guid> QueueTemplatedInternalAsync(
+        string templateCode, IReadOnlyDictionary<string, string> tokens, IReadOnlySet<string>? rawHtmlTokens, string toAddress, Guid? userId,
+        Guid? tenantId, string? culture, Guid? batchId, CancellationToken cancellationToken)
     {
         var template = await emailTemplates.GetByCodeAsync(templateCode)
             ?? throw new InvalidOperationException($"No email template registered for code '{templateCode}'.");
+
+        // An email to a person is worded in the language that person chose, wherever the caller did not say otherwise: what was asked for wins, then the
+        // person's own setting, then the platform default (see ResolveTranslation). So a caller that has a user id does not have to know their language.
+        if (string.IsNullOrWhiteSpace(culture) && userId is { } person)
+        {
+            culture = (await userProfiles.FindAsync(person, cancellationToken))?.PreferredCulture;
+        }
 
         var defaultCulture = await settingsCache.GetStringAsync(PlatformSettingsRegistry.DefaultCulture);
         var translation = ResolveTranslation(template, culture, defaultCulture);
@@ -55,10 +74,10 @@ public class CommunicationPublisher(
             [EmailTemplateRegistry.Placeholders.SiteUrl] = siteUrl
         };
 
-        var (subject, htmlBody) = EmailTemplateRenderer.Render(translation.Subject, translation.HtmlBody, mergedTokens);
+        var (subject, htmlBody) = EmailTemplateRenderer.Render(translation.Subject, translation.HtmlBody, mergedTokens, rawHtmlTokens);
 
         return await QueueInternalAsync(
-            toAddress, userId, tenantId, subject, htmlBody, siteName, siteUrl, cancellationToken);
+            toAddress, userId, tenantId, subject, htmlBody, siteName, siteUrl, cancellationToken, batchId);
     }
 
     /// <summary>
@@ -116,7 +135,7 @@ public class CommunicationPublisher(
     /// </summary>
     private async Task<Guid> QueueInternalAsync(
         string toAddress, Guid? userId, Guid? tenantId, string subject, string htmlBody,
-        string siteName, string siteUrl, CancellationToken cancellationToken)
+        string siteName, string siteUrl, CancellationToken cancellationToken, Guid? batchId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toAddress);
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
@@ -135,6 +154,7 @@ public class CommunicationPublisher(
             Id = id,
             UserId = userId,
             TenantId = tenantId,
+            BatchId = batchId,
             ToAddress = toAddress,
             Subject = subject,
             HtmlBody = WithTrackingPixel(id, EmailLayout.Wrap(htmlBody, siteName, siteUrl)),

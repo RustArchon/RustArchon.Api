@@ -199,7 +199,39 @@ builder.Services.AddScoped<IMapPreviewService, MapPreviewService>();
 // requests.
 builder.Services.AddScoped<IReportForwardingService, ReportForwardingService>();
 builder.Services.AddScoped<IReportIngestService, ReportIngestService>();
+builder.Services.AddScoped<IReportAssigneeService, ReportAssigneeService>();
+
+// Direct download addresses for the plugins UpdateChecker says have updates, asked of a public marketplace index once per plugin version for
+// the whole platform (a job, never a page read). The one address it ever calls is fixed in PluginDownloadResolver; the throttle is a singleton
+// so being told to slow down stops every lookup.
+builder.Services.AddHttpClient<IPluginDownloadResolver, PluginDownloadResolver>(client =>
+{
+    client.BaseAddress = new Uri(PluginDownloadResolver.BaseAddress);
+    client.Timeout = TimeSpan.FromSeconds(8);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("RustArchon-Panel");
+});
+builder.Services.AddSingleton<PluginDownloadThrottle>();
+builder.Services.AddScoped<IPluginDownloadLookupJob, PluginDownloadLookupJob>();
+builder.Services.AddScoped<IThirdPartyPluginUpdateGate, ThirdPartyPluginUpdateGate>();
+builder.Services.AddScoped<IPlanSubscriberMover, PlanSubscriberMover>();
+builder.Services.AddScoped<IUserProfileStore, UserProfileStore>();
+builder.Services.AddScoped<IPlanAnnouncementService, PlanAnnouncementService>();
+
+// Looks once at the file behind each found download address that a server which opted in is waiting on: downloaded, hashed, checked, dropped.
+// Never stored. The client only connects to public internet addresses and follows redirects itself (see PluginFileDownloader.CreateHandler).
+builder.Services.AddHttpClient<IPluginFileDownloader, PluginFileDownloader>(client =>
+{
+    client.Timeout = PluginFileDownloader.Timeout;
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("RustArchon-Panel");
+}).ConfigurePrimaryHttpMessageHandler(PluginFileDownloader.CreateHandler);
+builder.Services.AddSingleton<IPluginFileInspector, PluginFileInspector>();
+builder.Services.AddScoped<IPluginFileValidationJob, PluginFileValidationJob>();
+builder.Services.AddHostedService<PluginFileValidationService>();
+builder.Services.AddHostedService<PluginDownloadLookupService>();
 builder.Services.AddSingleton<IReportIngestThrottle, ReportIngestThrottle>();
+builder.Services.AddSingleton<IServerPollThrottle, ServerPollThrottle>();
+builder.Services.AddSingleton<IPluginFileRecheckThrottle, PluginFileRecheckThrottle>();
+builder.Services.AddScoped<IServerPollService, ServerPollService>();
 builder.Services.AddSingleton<IntegrationCheckLimit>();
 
 // Checks an admin-typed third-party key with its provider before it is saved (the wizard's and the edit form's Verify buttons).
@@ -249,6 +281,10 @@ builder.Services.AddMassTransit(x =>
     // currently owns this server) maps to a 504.
     x.AddRequestClient<SendRconCommand>(RequestTimeout.After(s: 10));
 
+    // Matching fanout on the Worker side (PollServerNowConsumer) - see PollServerNow's remarks. IServerPollService is the only caller and maps a
+    // RequestTimeoutException (no instance responded) to ServerPollOutcome.NoWorker itself, so nothing here needs its own 504 mapping.
+    x.AddRequestClient<PollServerNow>(RequestTimeout.After(s: 10));
+
     // Longer timeout than SendRconCommand's - an actual SMTP/API round trip can genuinely take a
     // few seconds, where an RCON socket write is near-instant. See PlatformSettingsController.TestEmail
     // for the matching RequestTimeoutException -> 504 mapping.
@@ -277,6 +313,9 @@ builder.Services.AddScoped<IPluginDataRetention, PluginDataRetention>();
 builder.Services.AddHostedService<PluginDataPruneService>();
 builder.Services.AddScoped<IPluginAutoUpdater, PluginAutoUpdater>();
 builder.Services.AddHostedService<PluginAutoUpdateService>();
+builder.Services.AddScoped<IThirdPartyPluginUpdateService, ThirdPartyPluginUpdateService>();
+builder.Services.AddScoped<IThirdPartyPluginAutoUpdater, ThirdPartyPluginAutoUpdater>();
+builder.Services.AddHostedService<ThirdPartyPluginAutoUpdateService>();
 builder.Services.AddSignalR();
 
 // ============================================

@@ -73,6 +73,31 @@ public class PlanRepository(ApiDbContext context, IUserContext? userContext = nu
     }
 
     /// <inheritdoc />
+    public async Task<Plan?> GetLatestVersionAsync(Guid planId)
+    {
+        var seen = new HashSet<Guid>();
+        Plan? current = null;
+        var nextId = (Guid?)planId;
+        while (nextId is { } id && seen.Add(id))
+        {
+            var plan = await GetWithPricesAsync(id);
+            if (plan is null)
+            {
+                break;      // a link to a plan that is gone: the chain ends at the last one that is there
+            }
+
+            current = plan;
+            nextId = plan.SupersededByPlanId;
+        }
+
+        return current;
+    }
+
+    /// <inheritdoc />
+    public Task<int> ClearSupersededByAsync(Guid planId) =>
+        _dbSet.Where(p => p.SupersededByPlanId == planId).ExecuteUpdateAsync(s => s.SetProperty(p => p.SupersededByPlanId, (Guid?)null));
+
+    /// <inheritdoc />
     public Task<List<Plan>> GetAllOrderedAsync() =>
         _dbSet.Include(p => p.Prices).OrderBy(p => p.Name).ThenByDescending(p => p.CreatedOn).ToListAsync();
 }

@@ -44,11 +44,18 @@ public static class PluginSourceSyntax
     /// The problems that would stop <paramref name="source"/> compiling as C# 7.3, each as "line N: what is wrong", at most
     /// <see cref="MaxListed"/>, in the order they occur. Empty when it reads cleanly. <paramref name="total"/> is how many there are altogether.
     /// </summary>
-    public static IReadOnlyList<string> Problems(string source, out int total)
+    public static IReadOnlyList<string> Problems(string source, out int total) => Problems(source, LanguageVersion.CSharp7_3, out total);
+
+    /// <summary>
+    /// The same, read as <paramref name="language"/>. The plugin's own file is held to C# 7.3 (it has to load on the oldest compiler a server may have);
+    /// somebody else's plugin is read as <see cref="LanguageVersion.Latest"/>, so only real syntax errors count: what the servers' compilers accept is
+    /// theirs to say, and popular plugins already use modern syntax that Carbon compiles.
+    /// </summary>
+    public static IReadOnlyList<string> Problems(string source, LanguageVersion language, out int total)
     {
         var tree = CSharpSyntaxTree.ParseText(
             source,
-            new CSharpParseOptions(LanguageVersion.CSharp7_3, DocumentationMode.None, SourceCodeKind.Regular));
+            new CSharpParseOptions(language, DocumentationMode.None, SourceCodeKind.Regular));
 
         var compilation = CSharpCompilation.Create(
             "PluginSyntaxCheck", [tree], CoreLibrary, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));

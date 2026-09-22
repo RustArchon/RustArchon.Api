@@ -80,6 +80,21 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     public DbSet<ServerReport> ServerReports { get; set; } = null!;
 
     /// <summary>
+    /// Gets or sets the ServerReportNote DbSet.
+    /// </summary>
+    public DbSet<ServerReportNote> ServerReportNotes { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginDownloadLookup DbSet.
+    /// </summary>
+    public DbSet<PluginDownloadLookup> PluginDownloadLookups { get; set; } = null!;
+
+    public DbSet<CommunicationBatch> CommunicationBatches { get; set; } = null!;
+
+    /// <summary>People's own settings, keyed by identity user id - see <see cref="UserProfile"/>.</summary>
+    public DbSet<UserProfile> UserProfiles { get; set; } = null!;
+
+    /// <summary>
     /// Gets or sets the ServerInfoSnapshot DbSet.
     /// </summary>
     public DbSet<ServerInfoSnapshot> ServerInfoSnapshots { get; set; } = null!;
@@ -158,6 +173,21 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
     /// Gets or sets the PluginUpdateAttempt DbSet - each time the Panel asked a server to update its plugin or Updater, and how it went.
     /// </summary>
     public DbSet<PluginUpdateAttempt> PluginUpdateAttempts { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the ThirdPartyPluginUpdate DbSet - each time the Panel asked a server to apply a newer version of another plugin, and how it went.
+    /// </summary>
+    public DbSet<ThirdPartyPluginUpdate> ThirdPartyPluginUpdates { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginZipMapping DbSet - the instructions a person gave for where a zip-shaped plugin's files go on one server.
+    /// </summary>
+    public DbSet<PluginZipMapping> PluginZipMappings { get; set; } = null!;
+
+    /// <summary>
+    /// Gets or sets the PluginUpdateExclusion DbSet - plugins a person has said never to update, automatically or by hand, on one server.
+    /// </summary>
+    public DbSet<PluginUpdateExclusion> PluginUpdateExclusions { get; set; } = null!;
 
     /// <summary>
     /// Gets or sets the Plan DbSet.
@@ -332,6 +362,14 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
             .IsUnique()
             .HasFilter("\"Active\"")
             .HasDatabaseName("IX_Plan_Name_WhereActive");
+
+        // "Replaced by": a plan points at the newer version that superseded it. Optional, and cleared (not blocked) when that newer plan is deleted -
+        // then the older one is no longer replaced by anything, which is what lets it be reactivated. No navigation property: the link is followed by id.
+        modelBuilder.Entity<Plan>()
+            .HasOne<Plan>()
+            .WithMany()
+            .HasForeignKey(p => p.SupersededByPlanId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         // Same technique as Plan's index directly above, for the same reason: Subscription is subscription
         // *history*, so a tenant legitimately has many rows and only the open one (EndDate IS NULL) is
@@ -568,6 +606,14 @@ public class ApiDbContext(DbContextOptions<ApiDbContext> options, ITenantContext
         modelBuilder.Entity<TicketNote>()
             .HasIndex(n => n.TicketId)
             .HasDatabaseName("IX_TicketNote_TicketId");
+
+        // A note belongs to exactly one report and never outlives it. ServerReportRepository.DeleteForServerAcrossTenantsAsync
+        // removes a server's reports without loading their notes, so the cascade is the database's job, not EF's.
+        modelBuilder.Entity<ServerReportNote>()
+            .HasOne(n => n.ServerReport)
+            .WithMany()
+            .HasForeignKey(n => n.ServerReportId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         // Belt-and-suspenders alongside ThemeService.ActivateAsync's own application-level enforcement
         // (see Theme.IsActive's remarks) - a partial unique index means "more than one active theme"
