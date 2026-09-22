@@ -42,9 +42,8 @@ public interface ICommunicationPublisher
     /// <param name="tokens">Values for the template's <c>{{Token}}</c> placeholders - see
     /// <c>EmailTemplateRenderer.Render</c>'s remarks for how they're substituted.</param>
     /// <param name="culture">
-    /// The recipient's preferred culture (e.g. <c>"en-US"</c>), when known - see
-    /// <c>RustArchon.Panel.Data.ApplicationUser.PreferredCulture</c>, the only real source of one today.
-    /// Never required: a template with no matching <c>EmailTemplateTranslation</c> for this culture
+    /// The recipient's preferred culture (e.g. <c>"en-US"</c>), when the caller knows better; left out, a message to a person (<c>UserId</c> set) is worded
+    /// in their own <c>UserProfile</c> language. Never required: a template with no matching <c>EmailTemplateTranslation</c> for this culture
     /// falls back through the platform's <c>DefaultCulture</c> setting to <c>"en-US"</c>, and finally to
     /// whichever translation exists at all - a missing translation is never a reason to fail a send.
     /// Organization-level sends (tenantId set) have no single recipient culture to pass and simply omit
@@ -53,4 +52,13 @@ public interface ICommunicationPublisher
     Task<Guid> QueueTemplatedAsync(
         string templateCode, IReadOnlyDictionary<string, string> tokens, string toAddress, Guid? userId,
         Guid? tenantId, string? culture = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// As <see cref="QueueTemplatedAsync"/>, for a message a site admin wrote: the tokens named in <paramref name="rawHtmlTokens"/> already hold markup (built by
+    /// <c>AnnouncementBody.ToHtml</c>, which encodes everything) and are put into the body as they are rather than encoded, and the communication is recorded as
+    /// one email of <paramref name="batchId"/> (a <c>CommunicationBatch</c>) when given. Never pass unchecked text as a raw token.
+    /// </summary>
+    Task<Guid> QueueTemplatedWithMarkupAsync(
+        string templateCode, IReadOnlyDictionary<string, string> tokens, IReadOnlySet<string> rawHtmlTokens, string toAddress, Guid? userId,
+        Guid? tenantId, string? culture = null, Guid? batchId = null, CancellationToken cancellationToken = default);
 }

@@ -92,6 +92,12 @@ public class RustServerMappingProfile
         createMap.ForMember(dest => dest.PluginAutoUpdateEnabled, opt => opt.Ignore());
         updateMap.ForMember(dest => dest.PluginAutoUpdateEnabled, opt => opt.Ignore());
 
+        // The third-party plugin update settings have their own endpoint, for the same reason: a full-record PUT must never reset them.
+        createMap.ForMember(dest => dest.ThirdPartyPluginUpdatesEnabled, opt => opt.Ignore());
+        createMap.ForMember(dest => dest.ThirdPartyPluginUpdateHoldDays, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.ThirdPartyPluginUpdatesEnabled, opt => opt.Ignore());
+        updateMap.ForMember(dest => dest.ThirdPartyPluginUpdateHoldDays, opt => opt.Ignore());
+
         // The report-forwarding secret and its verified-at stamp are never on a create/update DTO and never mapped back out
         // (ADR-0001): the secret is minted, rotated and read only by ReportForwardingService, behind its own permission, so an
         // ordinary edit - which a lesser role can make - can neither read nor overwrite it.

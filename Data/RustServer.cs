@@ -180,6 +180,21 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     public bool PluginAutoUpdateEnabled { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets whether this server has opted in to having updates to its <b>third-party</b> plugins (the ones UpdateChecker reports)
+    /// applied automatically - the server's own gate. Off for a new server: it takes an explicit choice. It counts only if the organization's
+    /// plan offers the feature (<see cref="Plan.OffersThirdPartyPluginUpdates"/>) and the server is outside its wipe window
+    /// (<see cref="ThirdPartyPluginUpdateHoldDays"/>). Unrelated to <see cref="PluginAutoUpdateEnabled"/>, which is RustArchon's own plugin.
+    /// </summary>
+    public bool ThirdPartyPluginUpdatesEnabled { get; set; }
+
+    /// <summary>
+    /// Gets or sets how many days before the monthly wipe (the first Thursday of the month at 19:00 London time) automatic third-party plugin
+    /// updates are held back, because plugins tend to update ahead of a wipe in ways the current server code cannot run. 7 by default;
+    /// <c>0</c> means never held - every update is taken right up to wipe day, even if it may break.
+    /// </summary>
+    public int ThirdPartyPluginUpdateHoldDays { get; set; } = 7;
+
+    /// <summary>
     /// Gets or sets the secret in this server's report-forwarding address, encrypted at rest (ADR-0001). <c>null</c> until an
     /// authorized user first asks for the address - and while it is <c>null</c> the server accepts no reports at all, so an
     /// existing server is closed until forwarding is deliberately turned on. Independently random per server, never derived from

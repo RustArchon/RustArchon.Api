@@ -105,4 +105,10 @@ public class ServerReport : Entity, ITenantScoped
     public Guid? ReviewedByUserId { get; set; }
 
     public DateTimeOffset? ReviewedAtUtc { get; set; }
+
+    /// <summary>
+    /// The member of the tenant working this report, or <c>null</c> when unassigned. Independent of <see cref="Status"/> and of
+    /// <see cref="ReviewedByUserId"/> (who last changed the status): a report can be assigned while still new, and reassigned after.
+    /// </summary>
+    public Guid? AssignedToUserId { get; set; }
 }

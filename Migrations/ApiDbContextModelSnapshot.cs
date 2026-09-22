@@ -836,6 +836,9 @@ namespace RustArchon.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTimeOffset?>("BouncedOn")
                         .HasColumnType("timestamp with time zone");
 
@@ -908,6 +911,75 @@ namespace RustArchon.Api.Migrations
                         .HasDatabaseName("IX_Communication_UserId");
 
                     b.ToTable("Communications");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.CommunicationBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CreatedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("DeletedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IncludePastDue")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IncludeSupersedingVersions")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("LanguageMode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid?>("ModifiedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ModifiedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("RecipientCount")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("SentById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("SentOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SingleCulture")
+                        .HasMaxLength(35)
+                        .HasColumnType("character varying(35)");
+
+                    b.Property<int>("SkippedCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("CommunicationBatch");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.ConnectionLogEntry", b =>
@@ -1641,6 +1713,9 @@ namespace RustArchon.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("OffersThirdPartyPluginUpdates")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("OnePerOwner")
                         .HasColumnType("boolean");
 
@@ -1650,12 +1725,17 @@ namespace RustArchon.Api.Migrations
                     b.Property<int>("RetentionHistory")
                         .HasColumnType("integer");
 
+                    b.Property<Guid?>("SupersededByPlanId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Name")
                         .IsUnique()
                         .HasDatabaseName("IX_Plan_Name_WhereActive")
                         .HasFilter("\"Active\"");
+
+                    b.HasIndex("SupersededByPlanId");
 
                     b.ToTable("Plan");
                 });
@@ -1985,6 +2065,134 @@ namespace RustArchon.Api.Migrations
                     b.HasIndex(new[] { "ToUtc" }, "IX_PluginCombatChunk_ToUtc");
 
                     b.ToTable("PluginCombatChunk");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.PluginDownloadLookup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("CheckedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DownloadUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("FileHashChanges")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("FileKind")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
+                    b.Property<string>("FileSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<long?>("FileSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<int?>("HttpStatus")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("MarketplaceKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("MatchedName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("MatchedPageUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("MatchedVersion")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTimeOffset?>("NextAttemptUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PluginClassName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("PluginInfoAuthor")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("PluginInfoName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("PluginInfoVersion")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("PreviousFileSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("ResponseJson")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("ResponseTruncated")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset?>("ValidatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ValidationAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("ValidationNextAttemptUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ValidationReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<int>("ValidationState")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("ZipEntries")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ZipSourceFindings")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex(new[] { "MarketplaceKey", "NormalizedName", "Version" }, "IX_PluginDownloadLookup_Key")
+                        .IsUnique();
+
+                    b.HasIndex(new[] { "NextAttemptUtc" }, "IX_PluginDownloadLookup_NextAttemptUtc");
+
+                    b.ToTable("PluginDownloadLookup");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.PluginKeyHistory", b =>
@@ -2431,6 +2639,41 @@ namespace RustArchon.Api.Migrations
                     b.ToTable("PluginUpdateAttempt");
                 });
 
+            modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateExclusion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("ExcludedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Note")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("RustServerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex(new[] { "RustServerId", "NormalizedName" }, "IX_PluginUpdateExclusion_Server_Plugin")
+                        .IsUnique();
+
+                    b.ToTable("PluginUpdateExclusion");
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateNotice", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2541,6 +2784,46 @@ namespace RustArchon.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("PluginUpdateToken");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.PluginZipMapping", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("LastAppliedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("RulesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("RustServerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("SavedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("Trusted")
+                        .HasColumnType("boolean");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex(new[] { "RustServerId", "NormalizedName" }, "IX_PluginZipMapping_Server_Plugin")
+                        .IsUnique();
+
+                    b.ToTable("PluginZipMapping");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.Queue", b =>
@@ -2741,6 +3024,12 @@ namespace RustArchon.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("ThirdPartyPluginUpdateHoldDays")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("ThirdPartyPluginUpdatesEnabled")
+                        .HasColumnType("boolean");
+
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId", "Name")
@@ -2934,6 +3223,9 @@ namespace RustArchon.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("AssignedToUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Message")
                         .IsRequired()
                         .HasMaxLength(5000)
@@ -3016,6 +3308,50 @@ namespace RustArchon.Api.Migrations
                         .IsDescending(false, false, true);
 
                     b.ToTable("ServerReport");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.ServerReportNote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<Guid>("CreatedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeletedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("DeletedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ModifiedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ModifiedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ServerReportId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex(new[] { "ServerReportId", "CreatedOn" }, "IX_ServerReportNote_ServerReportId_CreatedOn");
+
+                    b.ToTable("ServerReportNote");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.Subscription", b =>
@@ -3240,6 +3576,101 @@ namespace RustArchon.Api.Migrations
                         .HasFilter("\"IsActive\" = true");
 
                     b.ToTable("Themes");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.ThirdPartyPluginUpdate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ActualSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("ClassName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("FileSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("FromVersion")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("PluginDownloadLookupId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PluginName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTimeOffset?>("ResolvedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("RustServerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("SaveMapping")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTimeOffset>("StartedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ToVersion")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex(new[] { "RustServerId", "NormalizedName", "ToVersion" }, "IX_ThirdPartyPluginUpdate_Server_Plugin_Version");
+
+                    b.HasIndex(new[] { "RustServerId", "StartedAtUtc" }, "IX_ThirdPartyPluginUpdate_Server_StartedAtUtc");
+
+                    b.ToTable("ThirdPartyPluginUpdate");
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.Ticket", b =>
@@ -3474,6 +3905,30 @@ namespace RustArchon.Api.Migrations
                         .HasDatabaseName("IX_TicketStatus_Slug");
 
                     b.ToTable("TicketStatuses");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.UserProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PreferredCulture")
+                        .HasMaxLength(35)
+                        .HasColumnType("character varying(35)");
+
+                    b.Property<DateTimeOffset>("UpdatedOn")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex(new[] { "UserId" }, "IX_UserProfile_UserId")
+                        .IsUnique();
+
+                    b.ToTable("UserProfile");
                 });
 
             modelBuilder.Entity("EmailPlaceholderEmailTemplate", b =>
@@ -3799,6 +4254,14 @@ namespace RustArchon.Api.Migrations
                     b.Navigation("Payment");
                 });
 
+            modelBuilder.Entity("RustArchon.Api.Data.Plan", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.Plan", null)
+                        .WithMany()
+                        .HasForeignKey("SupersededByPlanId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.PlanPrice", b =>
                 {
                     b.HasOne("RustArchon.Api.Data.Plan", "Plan")
@@ -3909,6 +4372,17 @@ namespace RustArchon.Api.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateExclusion", b =>
+                {
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateNotice", b =>
                 {
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
@@ -3921,6 +4395,17 @@ namespace RustArchon.Api.Migrations
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.PluginUpdateToken", b =>
+                {
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.PluginZipMapping", b =>
                 {
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
                         .WithMany()
@@ -4016,6 +4501,25 @@ namespace RustArchon.Api.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("RustArchon.Api.Data.ServerReportNote", b =>
+                {
+                    b.HasOne("RustArchon.Api.Data.ServerReport", "ServerReport")
+                        .WithMany()
+                        .HasForeignKey("ServerReportId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ServerReport");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("RustArchon.Api.Data.Subscription", b =>
                 {
                     b.HasOne("RustArchon.Api.Data.Plan", "Plan")
@@ -4047,6 +4551,17 @@ namespace RustArchon.Api.Migrations
                 });
 
             modelBuilder.Entity("RustArchon.Api.Data.TenantBillingAddress", b =>
+                {
+                    b.HasOne("JumpStart.Data.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RustArchon.Api.Data.ThirdPartyPluginUpdate", b =>
                 {
                     b.HasOne("JumpStart.Data.Tenant", "Tenant")
                         .WithMany()

@@ -320,6 +320,33 @@ public static class PlatformSettingsRegistry
     public const string PluginAutoUpdatesEnabled = "PluginAutoUpdatesEnabled";
 
     /// <summary>
+    /// Whether the Panel looks up direct download addresses for the plugins UpdateChecker says have updates, by asking a public marketplace index
+    /// (serverarmour.com) about each plugin once per version. What is sent is only a plugin's name and its marketplace - never anything about a
+    /// server or a player. On by default; turning it off stops every lookup at once (addresses already found stay).
+    /// </summary>
+    public const string PluginDownloadLookupEnabled = "PluginDownloadLookupEnabled";
+
+    /// <summary>
+    /// Whether the platform downloads the plugin files behind the direct links it has found, to look at them once (hash, kind, does it read as a
+    /// plugin) before any server is asked to apply one. Only files somebody is waiting on are fetched, and none is kept. On by default; off stops every download.
+    /// </summary>
+    public const string PluginFileValidationEnabled = "PluginFileValidationEnabled";
+
+    /// <summary>
+    /// The largest plugin file or archive, in megabytes, the platform will download to look at (a file is held in memory while it is hashed and read).
+    /// 100 by default and never more than 128, which is what a game server's plugin is willing to fetch; a larger file is recorded as not applicable
+    /// rather than fetched. Real plugins are kilobytes to a few megabytes.
+    /// </summary>
+    public const string PluginFileMaxMegabytes = "PluginFileMaxMegabytes";
+
+    /// <summary>
+    /// Whether the platform starts applying third-party plugin updates by itself on servers that opted in (and whose plan offers it, and that are outside
+    /// their days-before-wipe window). On by default; off stops every new automatic start at once (updates already under way are still followed to their
+    /// outcome, and a person can still apply an update by hand).
+    /// </summary>
+    public const string ThirdPartyPluginAutoUpdatesEnabled = "ThirdPartyPluginAutoUpdatesEnabled";
+
+    /// <summary>
     /// How many hours a new plugin or Updater version takes to become eligible for automatic installation on every server (a straight-line ramp: half
     /// the servers after half the time). Zero, the default, means everyone at once. A person pressing Update is never held back by it.
     /// </summary>
@@ -769,6 +796,62 @@ public static class PlatformSettingsRegistry
             description: "Lets servers that have turned on \"Update automatically\" receive the plugin and Updater versions this Panel serves without " +
                 "anyone pressing a button. Turn this off to stop every automatic update at once, for example if a release turns out to be bad " +
                 "(you can also withdraw the release). Administrators can still update a server by hand.",
+            valueType: PlatformSettingValueType.Boolean,
+            defaultValue: "true",
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PluginDownloadLookupEnabled,
+            category: Categories.Plugin,
+            order: 25,
+            displayName: "Look up plugin download links",
+            description: "For the plugins UpdateChecker says have updates, asks a public marketplace index (serverarmour.com) for a direct download " +
+                "link, once per plugin version for the whole platform, and shows it beside the update notice. Only a plugin's name and its " +
+                "marketplace are sent - nothing about a server or a player. Paid and login-only plugins simply have no direct link. Turn this " +
+                "off to stop all lookups (links already found stay).",
+            valueType: PlatformSettingValueType.Boolean,
+            defaultValue: "true",
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PluginFileValidationEnabled,
+            category: Categories.Plugin,
+            order: 26,
+            displayName: "Check downloaded plugin files",
+            description: "Before any server is asked to apply a third-party plugin update, downloads the file behind the direct link once, records its " +
+                "SHA-256 and checks that it is a plugin source file that reads as C# a game server can compile (or a zip that needs a person's " +
+                "instructions). Only files that a server which opted in to automatic updates is waiting on are downloaded, and the file itself is " +
+                "never kept. Turn this off to stop every download.",
+            valueType: PlatformSettingValueType.Boolean,
+            defaultValue: "true",
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: PluginFileMaxMegabytes,
+            category: Categories.Plugin,
+            order: 28,
+            displayName: "Largest plugin file to download (MB)",
+            description: "The most the platform will download when it looks at a third-party plugin file or archive before any server is asked to apply " +
+                "it. The file is held in memory while it is checked, so this stops a host that streams without end from using up the Api's memory. " +
+                "Real plugins are kilobytes to a few megabytes; the default is 100 and the most that is honoured is 128, which is what a game " +
+                "server's plugin will fetch. A larger file is recorded as not applicable, not fetched.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: "100",
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: ThirdPartyPluginAutoUpdatesEnabled,
+            category: Categories.Plugin,
+            order: 27,
+            displayName: "Apply third-party plugin updates automatically",
+            description: "Lets servers that opted in to automatic updates for other plugins have a newer version applied without anyone pressing a button - " +
+                "only when the organization's plan offers it, the server is outside its days-before-wipe window, and the file was downloaded once and " +
+                "checked. The server keeps the old file as a backup and puts it back if the new one does not load. Turn this off to stop every new " +
+                "automatic update at once (people can still apply updates by hand).",
             valueType: PlatformSettingValueType.Boolean,
             defaultValue: "true",
             logger: logger);

@@ -83,6 +83,9 @@ public class Communication : AuditableEntity, ITenantScopedOptional
     /// <summary>Navigation to <see cref="TenantId"/>.</summary>
     public Tenant? Tenant { get; set; }
 
+    /// <summary>The send this was one email of, when a site admin sent one message to many organizations at once - see <see cref="CommunicationBatch"/>.</summary>
+    public Guid? BatchId { get; set; }
+
     /// <summary>The address it was actually sent to - always populated, unlike <see cref="UserId"/>.</summary>
     [Required]
     [StringLength(320)]

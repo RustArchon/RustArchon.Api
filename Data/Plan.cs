@@ -70,6 +70,14 @@ public class Plan : AuditableEntity
     public bool HasRoles { get; set; }
 
     /// <summary>
+    /// Whether this plan offers applying updates to third-party plugins (the ones UpdateChecker reports) automatically - the first of the
+    /// three gates on that feature. The other two are the server's own opt-in and the days before the monthly wipe that it is paused for;
+    /// see <c>ThirdPartyPluginUpdateGate</c>. Off unless an admin turns it on, and a plan somebody already subscribed to keeps its terms, so
+    /// offering this to them means superseding the plan like any other change.
+    /// </summary>
+    public bool OffersThirdPartyPluginUpdates { get; set; }
+
+    /// <summary>
     /// Whether one person may only ever have a single Organization of their own on this plan.
     /// </summary>
     /// <remarks>
@@ -111,4 +119,23 @@ public class Plan : AuditableEntity
     /// remarks for the full "at most one active per Name" rule and how it's enforced.
     /// </summary>
     public bool Active { get; set; }
+
+    /// <summary>
+    /// The newer version that replaced this one, or <c>null</c> if nothing has. Set by <c>PlansController.Supersede</c> and by nothing else: it
+    /// records "this plan was replaced" as a fact about the two rows, where before the only trace was that they shared a <see cref="Name"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It answers two questions that the name alone could not. <b>What replaced this?</b> - follow the link (a chain, when a version has itself been
+    /// replaced; see <c>IPlanRepository.GetLatestVersionAsync</c>). And <b>may this be switched back on?</b> - a plan that was only deactivated can be
+    /// reactivated, but one that was replaced cannot: its newer version is the plan to offer, and two versions of one plan competing for sign-ups is
+    /// exactly what superseding exists to prevent.
+    /// </para>
+    /// <para>
+    /// Deleting the newer version (only possible while nobody has been on it) clears the link, which makes the older one reactivatable again: it is
+    /// no longer replaced by anything. Plans are soft-deleted, so <c>PlansController.Delete</c> clears it itself; the foreign key's own "set null on
+    /// delete" covers a hard delete. Existing subscribers are unaffected either way - they stay on the row they signed up under.
+    /// </para>
+    /// </remarks>
+    public Guid? SupersededByPlanId { get; set; }
 }

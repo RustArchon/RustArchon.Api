@@ -113,6 +113,12 @@ public static class EmailTemplateRegistry
 
         /// <summary>Sent by <c>AdminTicketsController.AddMessage</c> when staff reply to a ticket.</summary>
         public const string TicketNewReply = "TicketNewReply";
+
+        /// <summary>
+        /// A message a site admin writes and sends to every organization on a plan (see <c>PlanAnnouncementService</c>). Its subject and body are only the
+        /// two tokens below: the words are the admin's, written each time, and this template is the frame around them.
+        /// </summary>
+        public const string PlanAnnouncement = "PlanAnnouncement";
     }
 
     /// <summary>The stable <see cref="Data.EmailPlaceholder.Name"/> values calling code asks for -
@@ -167,6 +173,12 @@ public static class EmailTemplateRegistry
         /// token-gated equivalent is stage-3 work, not built yet - every ticket these two templates are
         /// sent for today has a signed-in tenant submitter.</summary>
         public const string TicketLink = "TicketLink";
+
+        /// <summary>The subject the site admin wrote for an announcement, with its own <c>{{OrganizationName}}</c>-style tokens already filled in.</summary>
+        public const string AnnouncementSubject = "AnnouncementSubject";
+
+        /// <summary>The body the site admin wrote for an announcement, as finished email markup (built by <c>AnnouncementBody.ToHtml</c>; put in as it is).</summary>
+        public const string AnnouncementBody = "AnnouncementBody";
     }
 
     public static async Task EnsureDefaultsAsync(ApiDbContext dbContext, ILogger logger)
@@ -296,6 +308,31 @@ public static class EmailTemplateRegistry
             name: Placeholders.TicketLink,
             description: "The link back into the Panel to view the ticket and reply.",
             sample: "https://panel.example.com/Tickets/00000000-0000-0000-0000-000000000000",
+            logger: logger);
+
+        var announcementSubject = await EnsurePlaceholderAsync(
+            dbContext,
+            name: Placeholders.AnnouncementSubject,
+            description: "The subject the site admin wrote for an announcement to the organizations on a plan.",
+            sample: "An update to your plan",
+            logger: logger);
+
+        var announcementBody = await EnsurePlaceholderAsync(
+            dbContext,
+            name: Placeholders.AnnouncementBody,
+            description: "The message the site admin wrote for an announcement - finished markup, put in as it is.",
+            sample: "<p>Hello, here is what is changing.</p>",
+            logger: logger);
+
+        await EnsureTemplateAsync(
+            dbContext,
+            code: Codes.PlanAnnouncement,
+            name: "Plan announcement",
+            description: "The frame around a message a site admin writes and sends to every organization on a plan. The subject and body are the admin's "
+                + "own words, written each time in the announcement editor - edit this only to change what surrounds them.",
+            defaultSubject: "{{AnnouncementSubject}}",
+            defaultHtmlBody: "{{AnnouncementBody}}",
+            placeholders: [siteName, siteUrl, announcementSubject, announcementBody],
             logger: logger);
 
         await EnsureTemplateAsync(
