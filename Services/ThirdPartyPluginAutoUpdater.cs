@@ -59,11 +59,22 @@ public class ThirdPartyPluginAutoUpdater(
             .OrderBy(s => s.Id)
             .ToListAsync();
 
+        // A server that has not opted in is never visited below, which would make the commonest reason for "why is it not updating?" invisible.
+        // Say so for each (once, until it changes).
+        var notOptedIn = await context.RustServers.AcrossAllTenants().AsNoTracking()
+            .Where(s => s.IsEnabled && !s.ThirdPartyPluginUpdatesEnabled && !pendingServerIds.Contains(s.Id)).Select(s => s.Id).ToListAsync();
+        foreach (var serverId in notOptedIn)
+        {
+            ThirdPartyUpdateDecisionLog.OptIn(logger, serverId, optedIn: false);
+        }
+
         var started = 0;
         foreach (var server in servers)
         {
             try
             {
+                ThirdPartyUpdateDecisionLog.OptIn(logger, server.Id, server.ThirdPartyPluginUpdatesEnabled);
+
                 await service.ReconcileAsync(server, now);
 
                 if (!enabled || !server.ThirdPartyPluginUpdatesEnabled || started >= MaxStartsPerPass)

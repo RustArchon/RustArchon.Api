@@ -52,6 +52,19 @@ public static class ThirdPartyUpdateDecisionLog
             plugin, serverId, state, detail);
     }
 
+    /// <summary>Whether an enabled server has opted in to automatic updates. A server that has not is skipped by the automatic pass, so this is the only place that says so.</summary>
+    public static void OptIn(ILogger logger, Guid serverId, bool optedIn)
+    {
+        if (!Changed($"optin|{serverId}", optedIn ? "in" : "out") || optedIn)
+        {
+            return;
+        }
+
+        logger.LogInformation(
+            "Server {ServerId} has not opted in to automatic updates of other plugins (the switch on its Plugins tab), so the automatic pass does not look at it; a person can still apply updates by hand.",
+            serverId);
+    }
+
     /// <summary>How many outdated plugins the automatic pass found offers for on a server. Says so once when there are none.</summary>
     public static void Offers(ILogger logger, Guid serverId, int count)
     {
