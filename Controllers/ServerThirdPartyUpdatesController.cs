@@ -59,7 +59,8 @@ public class ServerThirdPartyUpdatesController(
             Files = [.. o.Value.Files ?? []],
             SavedRules = [.. o.Value.SavedRules ?? []],
             UncoveredPaths = [.. o.Value.UncoveredPaths ?? []],
-            MappingTrusted = o.Value.MappingTrusted
+            MappingTrusted = o.Value.MappingTrusted,
+            BlockCode = o.Value.BlockCode ?? string.Empty
         }).OrderBy(o => o.PluginName, StringComparer.OrdinalIgnoreCase).ToList());
     }
 

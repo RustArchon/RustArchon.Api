@@ -330,6 +330,7 @@ builder.Services.AddScoped<IPluginAutoUpdater, PluginAutoUpdater>();
 builder.Services.AddHostedService<PluginAutoUpdateService>();
 builder.Services.AddScoped<IThirdPartyPluginUpdateService, ThirdPartyPluginUpdateService>();
 builder.Services.AddScoped<IThirdPartyPluginAutoUpdater, ThirdPartyPluginAutoUpdater>();
+builder.Services.AddSingleton<ThirdPartyAutoUpdateStatus>();
 builder.Services.AddHostedService<ThirdPartyPluginAutoUpdateService>();
 builder.Services.AddSignalR();
 
