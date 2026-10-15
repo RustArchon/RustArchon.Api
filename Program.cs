@@ -315,16 +315,9 @@ builder.Services.AddMassTransit(x =>
         // ConfigureEndpoints' own default per-consumer-type queue naming is exactly right here, no
         // explicit ReceiveEndpoint needed. SendRconCommand's request client above needs no matching
         // consumer registration at all - MassTransit manages its temporary reply queue internally.
-        // Worker log batches are worth only as much as they are fresh: a transient queue (not durable) with a short expiry, so an Api that was
-        // down does not wake up to a flood of stale batches, and a queue that is full drops the oldest. Explicit, ahead of ConfigureEndpoints,
-        // so the default durable queue is not created for this consumer.
-        cfg.ReceiveEndpoint("rustarchon-api-worker-logs", e =>
-        {
-            e.Durable = false;
-            e.SetQueueArgument("x-message-ttl", 120_000);
-            e.SetQueueArgument("x-max-length", 1_000);
-            e.ConfigureConsumer<WorkerLogBatchConsumer>(context);
-        });
+        // The Workers' log batches: an explicit queue ahead of ConfigureEndpoints so the default queue is not created for this consumer. See
+        // WorkerLogQueue for why it is durable (RabbitMQ 4 refuses a transient non-exclusive queue) and how it stays small anyway.
+        cfg.ReceiveEndpoint(WorkerLogQueue.Name, e => WorkerLogQueue.Configure(e, context));
 
         cfg.ConfigureEndpoints(context);
     });
