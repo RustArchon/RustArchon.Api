@@ -164,6 +164,27 @@ public partial class ThirdPartyPluginUpdateService(
     public async Task<PluginUpdateResultDto> StartAsync(
         RustServer server, string pluginName, string trigger, string? expectedSha256 = null, IReadOnlyList<ZipMappingRule>? rules = null, bool saveMapping = false)
     {
+        var result = await StartCoreAsync(server, pluginName, trigger, expectedSha256, rules, saveMapping);
+
+        // One place says no for every one of the refusals below (and a start by a person), so none of them can be added later without being logged:
+        // the server, the plugin, which gate said no (the code) and why. See ThirdPartyUpdateDecisionLog for what the automatic pass leaves out.
+        if (!result.Started)
+        {
+            ThirdPartyUpdateDecisionLog.Refusal(logger, server.Id, pluginName, trigger, result.Code, result.Message);
+        }
+        else if (trigger != PluginUpdateTriggers.Auto)
+        {
+            logger.LogInformation(
+                "Third-party plugin update of {Plugin} on server {ServerId} was started ({Trigger}): {FromVersion} to {ToVersion}.",
+                pluginName, server.Id, trigger, result.FromVersion, result.ToVersion);
+        }
+
+        return result;
+    }
+
+    private async Task<PluginUpdateResultDto> StartCoreAsync(
+        RustServer server, string pluginName, string trigger, string? expectedSha256, IReadOnlyList<ZipMappingRule>? rules, bool saveMapping)
+    {
         var now = clock.GetUtcNow();
         var normalized = PluginUpdateNoticeRepository.Normalize(pluginName);
         if (normalized.Length == 0)

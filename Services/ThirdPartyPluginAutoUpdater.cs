@@ -49,6 +49,7 @@ public class ThirdPartyPluginAutoUpdater(
     public async Task<int> RunPassAsync(DateTimeOffset now)
     {
         var enabled = await settings.GetBooleanAsync(PlatformSettingsRegistry.ThirdPartyPluginAutoUpdatesEnabled, defaultValue: true);
+        ThirdPartyUpdateDecisionLog.AutoUpdatesSwitch(logger, enabled);
 
         // Servers that opted in, and any with an update still waiting for its outcome (a person may have started one, and may since have opted out).
         var pendingServerIds = await context.ThirdPartyPluginUpdates.AcrossAllTenants().AsNoTracking()
@@ -88,15 +89,20 @@ public class ThirdPartyPluginAutoUpdater(
     private async Task<bool> StartOneAsync(RustServer server, DateTimeOffset now)
     {
         var offers = await service.GetOffersAsync(server, now);
+        ThirdPartyUpdateDecisionLog.Offers(logger, server.Id, offers.Count);
         foreach (var (normalizedName, offer) in offers.OrderBy(o => o.Key, StringComparer.Ordinal))
         {
+            var name = await context.PluginUpdateNotices.AcrossAllTenants().AsNoTracking()
+                .Where(n => n.RustServerId == server.Id && n.NormalizedName == normalizedName).Select(n => n.Name).FirstOrDefaultAsync();
+            var shownName = name ?? normalizedName;
+
             if (offer.State != ThirdPartyUpdateOfferStates.Ready || !offer.CanApply)
             {
+                // Said when it changes, not every pass: this is the "why is it not updating" for an offer that is not yet one to press.
+                ThirdPartyUpdateDecisionLog.OfferWaiting(logger, server.Id, shownName, offer.State, offer.Detail);
                 continue;
             }
 
-            var name = await context.PluginUpdateNotices.AcrossAllTenants().AsNoTracking()
-                .Where(n => n.RustServerId == server.Id && n.NormalizedName == normalizedName).Select(n => n.Name).FirstOrDefaultAsync();
             if (name is null)
             {
                 continue;
@@ -109,8 +115,8 @@ public class ThirdPartyPluginAutoUpdater(
                 return true;
             }
 
-            // Refusals the service makes itself (held for the wipe, already tried, and so on) are expected and checked again next pass.
-            logger.LogDebug("The automatic update of {Plugin} on server {ServerId} was not started: {Code}.", name, server.Id, result.Code);
+            // Refusals the service makes itself (held for the wipe, already tried, and so on) are expected and checked again next pass. The service has
+            // already said which gate refused and why (once per change for an automatic start), so nothing more is logged here.
         }
 
         return false;

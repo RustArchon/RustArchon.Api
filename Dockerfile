@@ -20,12 +20,14 @@ WORKDIR /src
 COPY ["RustArchon.Api/RustArchon.Api.csproj", "RustArchon.Api/"]
 COPY ["RustArchon.Shared/RustArchon.Shared.csproj", "RustArchon.Shared/"]
 COPY ["RustArchon.Messaging/RustArchon.Messaging.csproj", "RustArchon.Messaging/"]
+COPY ["RustArchon.Diagnostics/RustArchon.Diagnostics.csproj", "RustArchon.Diagnostics/"]
 COPY ["JumpStart/JumpStart/JumpStart.csproj", "JumpStart/JumpStart/"]
 RUN dotnet restore "RustArchon.Api/RustArchon.Api.csproj"
 
 COPY ["RustArchon.Api/", "RustArchon.Api/"]
 COPY ["RustArchon.Shared/", "RustArchon.Shared/"]
 COPY ["RustArchon.Messaging/", "RustArchon.Messaging/"]
+COPY ["RustArchon.Diagnostics/", "RustArchon.Diagnostics/"]
 COPY ["JumpStart/", "JumpStart/"]
 # Embedded into the Api (see RustArchon.Api.csproj): the plugin script this Panel signs and serves.
 COPY ["RustArchon.Plugin/", "RustArchon.Plugin/"]
