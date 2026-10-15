@@ -16,6 +16,7 @@ using System.Threading.RateLimiting;
 using RustArchon.Api.Administration;
 using RustArchon.Api.Billing;
 using RustArchon.Api.Data;
+using RustArchon.Api.DiagnosticViews;
 using RustArchon.Api.Hubs;
 using RustArchon.Api.Infrastructure;
 using RustArchon.Api.Infrastructure.Authentication;
@@ -249,6 +250,8 @@ builder.Services.AddHttpClient<IIntegrationKeyVerifier, IntegrationKeyVerifier>(
     .RemoveAllLoggers();
 builder.Services.AddScoped<IPluginKeyService, PluginKeyService>();
 builder.Services.AddScoped<IDiagnosticLogTokenService, DiagnosticLogTokenService>();
+// The read-only diagnostic views behind /diagnostics/views (ADR-0007). The catalog is built from their definitions once, below, as the app starts.
+builder.Services.AddDiagnosticViews();
 builder.Services.AddScoped<IPluginLogSourceFactory, PluginLogSourceFactory>();
 
 // ============================================
@@ -681,6 +684,9 @@ builder.Services.AddControllers()
     });
 
 var app = builder.Build();
+
+// Building the catalog is what checks every view definition, so a bad one stops the Api starting rather than failing its first caller.
+_ = app.Services.GetRequiredService<RustArchon.Api.DiagnosticViews.ViewCatalog>();
 
 // ============================================
 // APPLY PENDING MIGRATIONS

@@ -323,7 +323,12 @@ public partial class ThirdPartyPluginUpdateService(
             var reply = ParseReply(response.Message.Message);
             if (!reply.Accepted)
             {
-                if (!TransientRefusals.Contains(reply.Code) && reply.Code != "plugin_too_old")
+                if (reply.Code == PluginReplyDiagnostics.UnreadableCode)
+                {
+                    PluginReplyDiagnostics.LogUnreadable(logger, server.Id, isZip ? "archon.thirdparty.zip" : "archon.thirdparty.update", response.Message.Message);
+                }
+
+                if (!TransientRefusals.Contains(reply.Code) && reply.Code != "plugin_too_old" && reply.Code != PluginReplyDiagnostics.UnreadableCode)
                 {
                     await updates.RecordRefusedAsync(request, reply.Code, reply.Message, now);
                 }
@@ -887,8 +892,11 @@ public partial class ThirdPartyPluginUpdateService(
         }
         catch (JsonException)
         {
-            // Not an envelope at all: most likely "Unknown command", i.e. the RustArchon plugin there predates this.
-            return (false, "plugin_too_old", "The server did not recognize the command; its RustArchon plugin may be too old.");
+            // Rust's own "Unknown command" means the plugin there predates this. Anything else is a reply that could not be read, which says nothing
+            // about the plugin's age and is logged by the caller.
+            return PluginReplyDiagnostics.IsUnknownCommand(reply)
+                ? (false, "plugin_too_old", "The server did not recognize the command; its RustArchon plugin may be too old.")
+                : (false, PluginReplyDiagnostics.UnreadableCode, PluginReplyDiagnostics.UnreadableMessage);
         }
     }
 

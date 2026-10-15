@@ -80,7 +80,7 @@ public class PluginUpdateService(
     /// Codes a plugin can refuse with that say nothing about the version itself (something else is in progress, or the plugin is not the
     /// one that can do this), so they are not held against it: the same update can be tried again later.
     /// </summary>
-    private static bool IsTransientRefusal(string code) => code is "busy" or "updater_missing" or "plugin_too_old";
+    private static bool IsTransientRefusal(string code) => code is "busy" or "updater_missing" or "plugin_too_old" or PluginReplyDiagnostics.UnreadableCode;
 
     public Task<PluginUpdateResultDto> StartAsync(RustServer server) => StartAsync(server, PluginUpdateTriggers.Manual);
 
@@ -180,6 +180,11 @@ public class PluginUpdateService(
             var (accepted, code, message) = ParseReply(response.Message.Message);
             if (!accepted)
             {
+                if (code == PluginReplyDiagnostics.UnreadableCode)
+                {
+                    PluginReplyDiagnostics.LogUnreadable(logger, server.Id, "archon.update", response.Message.Message);
+                }
+
                 await tokens.RevokeAsync(token);
                 if (!IsTransientRefusal(code))
                 {
@@ -301,6 +306,11 @@ public class PluginUpdateService(
             var (accepted, code, message) = ParseReply(response.Message.Message);
             if (!accepted)
             {
+                if (code == PluginReplyDiagnostics.UnreadableCode)
+                {
+                    PluginReplyDiagnostics.LogUnreadable(logger, server.Id, "archon.updater.update", response.Message.Message);
+                }
+
                 await tokens.RevokeAsync(token);
                 var shown = code == "updater_missing" ? "plugin_too_old" : code;
                 if (!IsTransientRefusal(shown))
@@ -357,8 +367,11 @@ public class PluginUpdateService(
         }
         catch (JsonException)
         {
-            // Not an envelope at all: most likely "Unknown command", i.e. the Updater is not actually loaded.
-            return (false, "updater_missing", "The server did not recognize the update command; the Updater plugin may not be loaded.");
+            // Rust's own "Unknown command" means the Updater is not loaded. Anything else is a reply that could not be read, which says nothing
+            // about the plugin's age and is logged by the caller.
+            return PluginReplyDiagnostics.IsUnknownCommand(reply)
+                ? (false, "updater_missing", "The server did not recognize the update command; the Updater plugin may not be loaded.")
+                : (false, PluginReplyDiagnostics.UnreadableCode, PluginReplyDiagnostics.UnreadableMessage);
         }
     }
 
