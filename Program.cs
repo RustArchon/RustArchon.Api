@@ -26,15 +26,23 @@ using RustArchon.Api.Infrastructure.ObjectStorage;
 using RustArchon.Api.Infrastructure.Security;
 using RustArchon.Api.Infrastructure.Steam;
 using RustArchon.Api.Infrastructure.ThemeUpdates;
+using RustArchon.Api.DiagnosticLogs;
 using RustArchon.Api.Messaging;
 using RustArchon.Api.Reporting;
 using RustArchon.Api.Repositories;
 using RustArchon.Api.Services;
+using RustArchon.Diagnostics;
 using RustArchon.Messaging.Contracts;
 using StackExchange.Redis;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Every log entry at Debug and above is kept in memory (whatever the console shows) so it can be read through the diagnostic log endpoint,
+// together with the Worker's forwarded entries (WorkerLogStore) and the plugin's on-demand ones. See ADR-0006.
+var logRing = new LogRing("api", Guid.NewGuid().ToString("N"), 5000);
+builder.Logging.AddDiagnosticRing(logRing);
+builder.Services.AddSingleton<WorkerLogStore>();
 
 // ============================================
 // 1. DATABASE CONTEXT
@@ -240,6 +248,8 @@ builder.Services.AddSingleton<IntegrationCheckLimit>();
 builder.Services.AddHttpClient<IIntegrationKeyVerifier, IntegrationKeyVerifier>(client => client.Timeout = TimeSpan.FromSeconds(10))
     .RemoveAllLoggers();
 builder.Services.AddScoped<IPluginKeyService, PluginKeyService>();
+builder.Services.AddScoped<IDiagnosticLogTokenService, DiagnosticLogTokenService>();
+builder.Services.AddScoped<IPluginLogSourceFactory, PluginLogSourceFactory>();
 
 // ============================================
 // 4c. MESSAGING (RABBITMQ)
@@ -274,6 +284,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<ServerPluginSettingsChangedConsumer>();
     x.AddConsumer<ServerReportCleanupConsumer>();
     x.AddConsumer<WorkerDiagnosticLoggedConsumer>();
+    x.AddConsumer<WorkerLogBatchConsumer>();
     x.AddConsumer<CommunicationDeliveredConsumer>();
 
     // 10s matches RustArchon.Worker's SendRconCommandConsumer fanout - see RustServersController's
@@ -304,6 +315,17 @@ builder.Services.AddMassTransit(x =>
         // ConfigureEndpoints' own default per-consumer-type queue naming is exactly right here, no
         // explicit ReceiveEndpoint needed. SendRconCommand's request client above needs no matching
         // consumer registration at all - MassTransit manages its temporary reply queue internally.
+        // Worker log batches are worth only as much as they are fresh: a transient queue (not durable) with a short expiry, so an Api that was
+        // down does not wake up to a flood of stale batches, and a queue that is full drops the oldest. Explicit, ahead of ConfigureEndpoints,
+        // so the default durable queue is not created for this consumer.
+        cfg.ReceiveEndpoint("rustarchon-api-worker-logs", e =>
+        {
+            e.Durable = false;
+            e.SetQueueArgument("x-message-ttl", 120_000);
+            e.SetQueueArgument("x-max-length", 1_000);
+            e.ConfigureConsumer<WorkerLogBatchConsumer>(context);
+        });
+
         cfg.ConfigureEndpoints(context);
     });
 });

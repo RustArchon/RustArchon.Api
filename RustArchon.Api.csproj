@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\RustArchon.Shared\RustArchon.Shared.csproj" />
+    <ProjectReference Include="..\RustArchon.Diagnostics\RustArchon.Diagnostics.csproj" />
     <ProjectReference Include="..\RustArchon.Messaging\RustArchon.Messaging.csproj" />
     <ProjectReference Include="..\JumpStart\JumpStart\JumpStart.csproj" />
   </ItemGroup>

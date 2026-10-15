@@ -81,6 +81,7 @@ public class PlatformSettingsController : ControllerBase
         PlatformSettingsRegistry.TicketingWebhookSecret => ApiKeyProtectorPurposes.TicketingWebhookSecret,
         PlatformSettingsRegistry.CaptchaSecretKey => ApiKeyProtectorPurposes.CaptchaSecretKey,
         PlatformSettingsRegistry.PluginSigningKey => ApiKeyProtectorPurposes.PluginSigningKey,
+        PlatformSettingsRegistry.DiagnosticLogToken => ApiKeyProtectorPurposes.DiagnosticLogToken,
         _ => throw new InvalidOperationException(
             $"'{key}' is declared as a Secret setting but has no IApiKeyProtector purpose registered.")
     };
@@ -127,6 +128,11 @@ public class PlatformSettingsController : ControllerBase
         if (key == PlatformSettingsRegistry.PluginSigningKey)
         {
             return BadRequest("The plugin signing key is managed on the Plugin page: rotate it there, which keeps the old key so installed plugins can still be updated.");
+        }
+
+        if (key == PlatformSettingsRegistry.DiagnosticLogToken)
+        {
+            return BadRequest("The diagnostic log token is managed on the Diagnostics page: create, rotate or revoke it there.");
         }
 
         var entity = await _repository.GetByKeyAsync(key);

@@ -49,6 +49,7 @@ public static class PlatformSettingsRegistry
         public const string Ticketing = "Ticketing";
         public const string Plugin = "Plugin";
         public const string Reports = "Reports";
+        public const string Diagnostics = "Diagnostics";
     }
 
     /// <summary>
@@ -314,6 +315,13 @@ public static class PlatformSettingsRegistry
     public const string PluginSigningKey = "PluginSigningKey";
 
     /// <summary>
+    /// The one read-only credential for the diagnostic log endpoint (ADR-0006): a record holding the token's id and a SHA-256 hash of its secret,
+    /// never the secret, encrypted at rest - see <see cref="Data.PlatformSettingValueType.Secret"/>. Empty means the feature is off. Created,
+    /// rotated and revoked only through <c>IDiagnosticLogTokenService</c> (the Diagnostics admin page); the generic settings endpoint refuses it.
+    /// </summary>
+    public const string DiagnosticLogToken = "DiagnosticLogToken";
+
+    /// <summary>
     /// The site-wide switch for automatic plugin updates. On by default; each server also has to opt in itself. Turning this off stops every
     /// automatic update at once (a person can still press the buttons) - the emergency stop for a release that turns out to be bad.
     /// </summary>
@@ -381,6 +389,15 @@ public static class PlatformSettingsRegistry
 
     /// <summary>The value <see cref="ReportsPerAddressPerMinute"/> falls back to when unset or unparseable.</summary>
     public const int DefaultReportsPerAddressPerMinute = 120;
+
+    /// <summary>
+    /// How many refused requests (wrong, missing or revoked token) one network address may make to the diagnostic log door per minute before the
+    /// Panel stops answering it for the rest of the minute. Successful requests are not counted.
+    /// </summary>
+    public const string LogReadFailuresPerAddressPerMinute = "LogReadFailuresPerAddressPerMinute";
+
+    /// <summary>The value <see cref="LogReadFailuresPerAddressPerMinute"/> falls back to when unset or unparseable.</summary>
+    public const int DefaultLogReadFailuresPerAddressPerMinute = 10;
 
     /// <summary>
     /// How many "Verify" checks of a third-party key (geolocation, VPN, Steam) one person may run per minute. Each one makes the Api call the
@@ -789,6 +806,18 @@ public static class PlatformSettingsRegistry
 
         await EnsureSettingAsync(
             dbContext,
+            key: DiagnosticLogToken,
+            category: Categories.Diagnostics,
+            order: 10,
+            displayName: "Diagnostic log token (managed)",
+            description: "The read-only credential for the diagnostic log endpoint. Managed on the Diagnostics page (create, rotate, revoke): it cannot be " +
+                "edited here. Stored as a hash, encrypted at rest. Empty means the endpoint is off.",
+            valueType: PlatformSettingValueType.Secret,
+            defaultValue: string.Empty,
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
             key: PluginAutoUpdatesEnabled,
             category: Categories.Plugin,
             order: 20,
@@ -906,6 +935,19 @@ public static class PlatformSettingsRegistry
                 "the per-server limit times the number of servers a host runs. The Panel picks up a change within a minute.",
             valueType: PlatformSettingValueType.Integer,
             defaultValue: DefaultReportsPerAddressPerMinute.ToString(),
+            logger: logger);
+
+        await EnsureSettingAsync(
+            dbContext,
+            key: LogReadFailuresPerAddressPerMinute,
+            category: Categories.Diagnostics,
+            order: 20,
+            displayName: "Refused log requests per network address per minute",
+            description: "How many refused requests (a wrong, missing or revoked token) one network address may make to the diagnostic log address each " +
+                "minute before it is ignored for the rest of that minute. Requests with a good token are never counted. The Panel picks up a change " +
+                "within a minute.",
+            valueType: PlatformSettingValueType.Integer,
+            defaultValue: DefaultLogReadFailuresPerAddressPerMinute.ToString(),
             logger: logger);
 
         await EnsureSettingAsync(
