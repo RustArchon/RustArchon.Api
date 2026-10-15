@@ -89,6 +89,11 @@ public class PluginMapUploadRequester(
 
             if (!response.Message.Success || !Accepted(response.Message.Message))
             {
+                if (response.Message.Success && !ReadableEnvelope(response.Message.Message))
+                {
+                    PluginReplyDiagnostics.LogUnreadable(logger, map.RustServerId, "archon.map.upload", response.Message.Message);
+                }
+
                 await tokens.RevokeAsync(token);
                 logger.LogInformation("Server {ServerId} did not accept the map upload request: {Reply}", map.RustServerId, response.Message.Message ?? response.Message.Error);
                 return false;
@@ -101,6 +106,25 @@ public class PluginMapUploadRequester(
         {
             await tokens.RevokeAsync(token);
             logger.LogInformation("Server {ServerId} did not answer the map upload request in time.", map.RustServerId);
+            return false;
+        }
+    }
+
+    // Whether the reply is a JSON object at all (accepted or refused); anything else is worth logging, because it is not an answer the plugin gives.
+    private static bool ReadableEnvelope(string? reply)
+    {
+        if (string.IsNullOrWhiteSpace(reply))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(reply);
+            return document.RootElement.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
             return false;
         }
     }

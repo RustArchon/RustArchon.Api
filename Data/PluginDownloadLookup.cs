@@ -94,6 +94,7 @@ public class PluginDownloadLookup : Entity
     public string? Reason { get; set; }
 
     /// <summary>The index's whole answer, untouched. Untrusted text from a third party: read, never acted on. Cut off (and <see cref="ResponseTruncated"/> set) rather than refused when it is over <see cref="MaxResponseLength"/>.</summary>
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("a bulky raw third-party response")]
     public string? ResponseJson { get; set; }
 
     public bool ResponseTruncated { get; set; }
@@ -150,6 +151,7 @@ public class PluginDownloadLookup : Entity
     public string? PluginInfoVersion { get; set; }
 
     /// <summary>For a zip: the files inside, one per line as <c>path</c>, a tab and the declared size, up to <see cref="MaxZipEntries"/> - what a person's instructions and a saved mapping are checked against (<c>ZipListing</c>).</summary>
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("a bulky archive listing")]
     public string? ZipEntries { get; set; }
 
     /// <summary>
@@ -157,6 +159,7 @@ public class PluginDownloadLookup : Entity
     /// as JSON (<c>ZipSourceFinding</c>). Recorded once, with the hash, so a person's instructions can be checked against it without the archive being
     /// fetched again. <c>null</c> for anything that is not a zip, and for a zip checked before this was kept (it is checked again).
     /// </summary>
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("a bulky archive inspection result")]
     public string? ZipSourceFindings { get; set; }
 
     public const int MaxZipEntries = 500;

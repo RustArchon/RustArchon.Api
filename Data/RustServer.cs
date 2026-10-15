@@ -65,6 +65,7 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// providers instead of hard-coding one provider's SQL type name.
     /// </remarks>
     [Required]
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("the server's RCON password")]
     public string RconPassword { get; set; } = string.Empty;
 
     /// <summary>
@@ -124,6 +125,7 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// <c>null</c> means this server has no Steam integration configured (those columns on
     /// <see cref="PlayerSession"/> simply stay unpopulated).
     /// </summary>
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("a Steam Web API key")]
     public string? SteamApiKey { get; set; }
 
     /// <summary>
@@ -137,6 +139,7 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// Gets or sets the API key for <see cref="GeolocationProvider"/>, encrypted at rest. Set only via
     /// <see cref="Infrastructure.Security.IApiKeyProtector.Protect"/> - never store plaintext here.
     /// </summary>
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("a geolocation provider API key")]
     public string? GeolocationApiKey { get; set; }
 
     /// <summary>
@@ -201,6 +204,7 @@ public class RustServer : AuditableNamedEntity, ITenantScoped
     /// anything else, and reversible (not hashed) because the Panel shows the address again on request. Set only via
     /// <see cref="Infrastructure.Security.IApiKeyProtector.Protect"/>.
     /// </summary>
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("the secret that authenticates the server's F7 report forwarding")]
     public string? ReportsSecret { get; set; }
 
     /// <summary>

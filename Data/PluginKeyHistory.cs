@@ -45,15 +45,18 @@ public class PluginKeyHistory : Entity
 
     [Required]
     [MaxLength(1000)]
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("key material (public part, not needed to diagnose)")]
     public string ModulusBase64 { get; set; } = string.Empty;
 
     [Required]
     [MaxLength(64)]
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("key material (public part, not needed to diagnose)")]
     public string ExponentBase64 { get; set; } = string.Empty;
 
     /// <summary>The private key, encrypted by <c>IApiKeyProtector</c> (purpose <c>PluginSigningKey</c>).</summary>
     [Required]
     [MaxLength(8000)]
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("the encrypted private signing key")]
     public string EncryptedPrivateKey { get; set; } = string.Empty;
 
     /// <summary><see cref="PluginKeyState.Retired"/> or <see cref="PluginKeyState.Revoked"/>; never Active.</summary>

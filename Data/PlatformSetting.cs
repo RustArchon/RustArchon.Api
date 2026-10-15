@@ -175,5 +175,6 @@ public class PlatformSetting : AuditableEntity
     /// </remarks>
     [Required]
     [MaxLength(8000)]
+    [RustArchon.Api.DiagnosticViews.DiagnosticsHidden("may be a secret (encrypted at rest for Secret settings); the platform-settings view returns it only for settings that are not")]
     public string Value { get; set; } = string.Empty;
 }
