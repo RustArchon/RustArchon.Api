@@ -41,6 +41,7 @@ public class ThirdPartyPluginAutoUpdater(
     ApiDbContext context,
     IThirdPartyPluginUpdateService service,
     IPlatformSettingsCache settings,
+    ThirdPartyAutoUpdateStatus status,
     ILogger<ThirdPartyPluginAutoUpdater> logger) : IThirdPartyPluginAutoUpdater
 {
     /// <summary>Most updates started in one pass.</summary>
@@ -48,6 +49,7 @@ public class ThirdPartyPluginAutoUpdater(
 
     public async Task<int> RunPassAsync(DateTimeOffset now)
     {
+        status.PassStarted(now);
         var enabled = await settings.GetBooleanAsync(PlatformSettingsRegistry.ThirdPartyPluginAutoUpdatesEnabled, defaultValue: true);
         ThirdPartyUpdateDecisionLog.AutoUpdatesSwitch(logger, enabled);
 
@@ -93,6 +95,7 @@ public class ThirdPartyPluginAutoUpdater(
             }
         }
 
+        status.PassFinished(now, servers.Count, started);
         return started;
     }
 
@@ -135,13 +138,15 @@ public class ThirdPartyPluginAutoUpdater(
 }
 
 /// <summary>Runs <see cref="IThirdPartyPluginAutoUpdater"/> every few minutes. A failed pass is logged and tried again next time.</summary>
-public class ThirdPartyPluginAutoUpdateService(IServiceScopeFactory scopeFactory, TimeProvider clock, ILogger<ThirdPartyPluginAutoUpdateService> logger) : BackgroundService
+public class ThirdPartyPluginAutoUpdateService(
+    IServiceScopeFactory scopeFactory, TimeProvider clock, ThirdPartyAutoUpdateStatus status, ILogger<ThirdPartyPluginAutoUpdateService> logger) : BackgroundService
 {
-    private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan InitialDelay = TimeSpan.FromMinutes(4);
+    public static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan InitialDelay = TimeSpan.FromMinutes(4);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        status.NextDue(clock.GetUtcNow() + InitialDelay);
         try
         {
             await Task.Delay(InitialDelay, stoppingToken);
@@ -156,6 +161,7 @@ public class ThirdPartyPluginAutoUpdateService(IServiceScopeFactory scopeFactory
         {
             try
             {
+                status.NextDue(clock.GetUtcNow() + Interval);
                 using var scope = scopeFactory.CreateScope();
                 await scope.ServiceProvider.GetRequiredService<IThirdPartyPluginAutoUpdater>().RunPassAsync(clock.GetUtcNow());
             }

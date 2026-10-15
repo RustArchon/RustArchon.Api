@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RustArchon.Api.Data;
 using RustArchon.Api.Infrastructure;
+using RustArchon.Api.Services;
 using RustArchon.Shared.DTOs;
 
 namespace RustArchon.Api.Controllers;
@@ -37,6 +38,7 @@ public class PluginAdminController(
     IPluginScriptService scripts,
     IPluginAdminAudit audit,
     IPluginRollout rollout,
+    ThirdPartyAutoUpdateStatus autoStatus,
     TimeProvider clock) : ControllerBase
 {
     /// <summary>The shortest reason accepted for signing a one-off file. The audit line is only worth something if it says why.</summary>
@@ -160,7 +162,9 @@ public class PluginAdminController(
         {
             Main = await ServedAsync(PluginReleaseKind.Main),
             Updater = await ServedAsync(PluginReleaseKind.Updater),
-            Releases = (await releases.ListAsync()).Select(ToDto).ToList()
+            Releases = (await releases.ListAsync()).Select(ToDto).ToList(),
+            ThirdPartyLastPassUtc = autoStatus.Current.LastPassStartedUtc,
+            ThirdPartyNextPassUtc = autoStatus.Current.NextPassDueUtc
         };
         return Ok(served);
     }
@@ -282,6 +286,29 @@ public class PluginAdminController(
 
         Response.Headers.CacheControl = "no-store";
         return File(script.Bytes, "text/plain", SignedFileName(stored.Kind));
+    }
+
+    /// <summary>
+    /// The plugin (or updater) this Panel is serving right now - the built-in build, or the published release that replaced it - signed with the active
+    /// key, as the download. This is the file to install by hand on a game server whose RustArchon plugin was not signed by this Panel. Signing is
+    /// by Panel key, not by server, so it is one file for every server. Audit-logged with who asked.
+    /// </summary>
+    [HttpGet("served/{kind}/download")]
+    public async Task<IActionResult> DownloadServed(string kind)
+    {
+        if (!TryParseKind(kind, out var releaseKind))
+        {
+            return BadRequest("Kind must be 'main' or 'updater'.");
+        }
+
+        var served = await releases.ResolveAsync(releaseKind);
+        var script = await scripts.SignSourceAsync(served.Text, releaseKind);
+        await audit.RecordAsync(
+            PluginAdminEventKind.ReleaseSigned, $"{releaseKind} {served.Version ?? script.PluginVersion}", Actor,
+            $"served build downloaded ({(served.FromRelease ? "published release" : "built-in")}), key {script.KeyFingerprint}");
+
+        Response.Headers.CacheControl = "no-store";
+        return File(script.Bytes, "text/plain", SignedFileName(releaseKind));
     }
 
     [HttpPost("releases/{id:guid}/publish")]

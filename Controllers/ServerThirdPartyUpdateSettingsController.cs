@@ -21,7 +21,8 @@ namespace RustArchon.Api.Controllers;
 [Route("api/rustservers/{id:guid}/third-party-update-settings")]
 [Authorize]
 public class ServerThirdPartyUpdateSettingsController(
-    IRustServerRepository servers, IThirdPartyPluginUpdateGate gate, TimeProvider clock) : ControllerBase
+    IRustServerRepository servers, IThirdPartyPluginUpdateGate gate, IThirdPartyPluginUpdateService updates, IPlatformSettingsCache platformSettings,
+    ThirdPartyAutoUpdateStatus autoStatus, TimeProvider clock) : ControllerBase
 {
     [HttpGet]
     [RequirePermission(PermissionCatalog.ServerGet)]
@@ -71,9 +72,22 @@ public class ServerThirdPartyUpdateSettingsController(
 
     private async Task<ThirdPartyPluginUpdateSettingsDto> ToDtoAsync(RustServer server)
     {
-        var result = await gate.EvaluateAsync(server, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        var result = await gate.EvaluateAsync(server, now);
+
+        // The same answer the automatic pass would get: its switch first, then the checks a start applies, in a start's order.
+        var switchOn = await platformSettings.GetBooleanAsync(PlatformSettingsRegistry.ThirdPartyPluginAutoUpdatesEnabled, defaultValue: true);
+        var refusal = switchOn ? await updates.GetServerRefusalAsync(server, now, automatic: true) : null;
+        var pass = autoStatus.Current;
         return new ThirdPartyPluginUpdateSettingsDto
         {
+            PlatformSwitchOn = switchOn,
+            AutoState = !switchOn ? "platform_switch_off" : refusal?.Code ?? "eligible",
+            AutoStateMessage = !switchOn
+                ? "Automatic third-party plugin updates are switched off for the whole platform (the ThirdPartyPluginAutoUpdatesEnabled platform setting), so no server is updated automatically."
+                : refusal?.Message ?? string.Empty,
+            LastPassUtc = pass.LastPassStartedUtc,
+            NextPassUtc = pass.NextPassDueUtc,
             PlanOffers = result.PlanOffers,
             Enabled = result.OptedIn,
             HoldDays = result.HoldDays,

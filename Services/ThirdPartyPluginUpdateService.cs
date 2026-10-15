@@ -31,10 +31,15 @@ namespace RustArchon.Api.Services;
 /// <param name="SavedRules">For a zip: the instructions saved for this plugin on this server, if any.</param>
 /// <param name="UncoveredPaths">For a zip with saved instructions: the files in this version of the archive that they do not cover, which is what stops them being used.</param>
 /// <param name="MappingTrusted">Whether the saved instructions have produced a working update, so an automatic update may use them.</param>
+/// <param name="BlockCode">When something other than the file is stopping an update right now, the code of the refusal a start would give (the same codes as
+/// <see cref="PluginUpdateResultDto.Code"/>), so the page can explain it and link to the remedy. <c>null</c> when nothing is.</param>
 public sealed record ThirdPartyUpdateOffer(
     string State, string Detail, string FileSha256, bool CanApply, DateTimeOffset? HeldUntilUtc,
     string Kind = "cs", IReadOnlyList<ZipEntryInfo>? Files = null, IReadOnlyList<ZipMappingRule>? SavedRules = null,
-    IReadOnlyList<string>? UncoveredPaths = null, bool MappingTrusted = false);
+    IReadOnlyList<string>? UncoveredPaths = null, bool MappingTrusted = false, string? BlockCode = null);
+
+/// <summary>Why an update will not start: a stable <see cref="Code"/> and a sentence for a person, with what to do about it where there is something to do.</summary>
+public sealed record PluginUpdateRefusal(string Code, string Message);
 
 /// <summary>The states of a <see cref="ThirdPartyUpdateOffer"/>. Empty (no offer at all) is the absence of one, not a state.</summary>
 public static class ThirdPartyUpdateOfferStates
@@ -80,6 +85,12 @@ public interface IThirdPartyPluginUpdateService
     /// </summary>
     Task<PluginUpdateResultDto> StartAsync(
         RustServer server, string pluginName, string trigger, string? expectedSha256 = null, IReadOnlyList<ZipMappingRule>? rules = null, bool saveMapping = false);
+
+    /// <summary>
+    /// The first server-level reason an update to any plugin on this server would not start (<c>null</c> when there is none): the same checks, in the same
+    /// order, as a start. <paramref name="automatic"/> adds the two that only bind the automatic pass (opt-in, days-before-wipe hold).
+    /// </summary>
+    Task<PluginUpdateRefusal?> GetServerRefusalAsync(RustServer server, DateTimeOffset now, bool automatic);
 
     /// <summary>Settles the updates that were started and have not reported an outcome. Returns how many were settled.</summary>
     Task<int> ReconcileAsync(RustServer server, DateTimeOffset now);
@@ -192,55 +203,12 @@ public partial class ThirdPartyPluginUpdateService(
             return Refused("no_update", "That plugin has no update waiting.");
         }
 
-        if (!server.IsEnabled)
-        {
-            return Refused("server_disabled", "This server is disabled.");
-        }
-
-        var gates = await gate.EvaluateAsync(server, now);
-        if (!gates.PlanOffers)
-        {
-            return Refused("plan_does_not_offer", "This organization's plan does not include automatic plugin updates.");
-        }
-
         var automatic = trigger == PluginUpdateTriggers.Auto;
-        if (automatic && !gates.OptedIn)
+        var gates = await gate.EvaluateAsync(server, now);
+        var serverRefusal = await CheckServerAsync(server, now, gates, automatic);
+        if (serverRefusal is not null)
         {
-            return Refused("not_opted_in", "This server has not opted in to automatic updates for other plugins.");
-        }
-
-        if (automatic && gates.State == ThirdPartyUpdateGateState.HeldForWipe)
-        {
-            return Refused("held_for_wipe", "Automatic updates are paused ahead of the monthly wipe.");
-        }
-
-        var status = await statuses.GetForServerAcrossTenantsAsync(server.TenantId, server.Id);
-        if (status is null)
-        {
-            return Refused("no_handshake", "The RustArchon plugin has not reported in yet.");
-        }
-
-        if (now - status.CapturedAtUtc > StatusFreshFor)
-        {
-            return Refused("stale_status", "The RustArchon plugin on this server has not been heard from recently.");
-        }
-
-        // The plugin that will do this must vouch for itself, under a key this Panel knows and has not revoked: nothing is applied to a game server
-        // by a plugin that is not the one this Panel manages.
-        var keyState = status.SigningState == PluginSigningStates.Valid ? await script.GetKeyStateAsync(status.SigningKeyFingerprint) : null;
-        if (keyState is null)
-        {
-            return Refused("not_signed_by_this_panel", "The RustArchon plugin on this server was not signed by this Panel, so it will not be used to update other plugins.");
-        }
-
-        if (keyState == PluginKeyState.Revoked)
-        {
-            return Refused("key_revoked", "The key the RustArchon plugin on this server was signed with has been revoked.");
-        }
-
-        if (!status.Capabilities.Contains(RustArchonPlugin.ThirdPartyUpdateCapability, StringComparer.Ordinal))
-        {
-            return Refused("plugin_too_old", "The RustArchon plugin on this server is too old to update other plugins. Update it first.");
+            return Refused(serverRefusal.Code, serverRefusal.Message);
         }
 
         var notice = await context.PluginUpdateNotices.AcrossAllTenants().AsNoTracking()
@@ -293,7 +261,8 @@ public partial class ThirdPartyPluginUpdateService(
         IReadOnlyList<ZipMappingRule>? usedRules = null;
         if (isZip)
         {
-            if (!status.Capabilities.Contains(RustArchonPlugin.ThirdPartyZipCapability, StringComparer.Ordinal))
+            var status = await statuses.GetForServerAcrossTenantsAsync(server.TenantId, server.Id);
+            if (status is null || !status.Capabilities.Contains(RustArchonPlugin.ThirdPartyZipCapability, StringComparer.Ordinal))
             {
                 return Refused("zip_unsupported", "The RustArchon plugin on this server cannot unpack archives, so this update is not applied here.");
             }
@@ -463,6 +432,68 @@ public partial class ThirdPartyPluginUpdateService(
         }
     }
 
+    public async Task<PluginUpdateRefusal?> GetServerRefusalAsync(RustServer server, DateTimeOffset now, bool automatic) =>
+        await CheckServerAsync(server, now, await gate.EvaluateAsync(server, now), automatic);
+
+    /// <summary>
+    /// Every check that is about the server and its RustArchon plugin rather than about one third-party plugin, in the order a start applies them: the
+    /// single place that says whether an update may start here, so what a person is shown and what a start does cannot disagree. The opt-in and the
+    /// days-before-wipe hold are only asked of an <paramref name="automatic"/> start; a person's click is their own decision.
+    /// </summary>
+    private async Task<PluginUpdateRefusal?> CheckServerAsync(RustServer server, DateTimeOffset now, ThirdPartyUpdateGateResult gates, bool automatic)
+    {
+        if (!server.IsEnabled)
+        {
+            return new("server_disabled", "This server is disabled.");
+        }
+
+        if (!gates.PlanOffers)
+        {
+            return new("plan_does_not_offer", "This organization's plan does not include automatic plugin updates.");
+        }
+
+        if (automatic && !gates.OptedIn)
+        {
+            return new("not_opted_in", "This server has not opted in to automatic updates for other plugins.");
+        }
+
+        if (automatic && gates.State == ThirdPartyUpdateGateState.HeldForWipe)
+        {
+            return new("held_for_wipe", "Automatic updates are paused ahead of the monthly wipe.");
+        }
+
+        var status = await statuses.GetForServerAcrossTenantsAsync(server.TenantId, server.Id);
+        if (status is null)
+        {
+            return new("no_handshake", "The RustArchon plugin has not reported in yet.");
+        }
+
+        if (now - status.CapturedAtUtc > StatusFreshFor)
+        {
+            return new("stale_status", "The RustArchon plugin on this server has not been heard from recently.");
+        }
+
+        // The plugin that will do this must vouch for itself, under a key this Panel knows and has not revoked: nothing is applied to a game server
+        // by a plugin that is not the one this Panel manages.
+        var keyState = status.SigningState == PluginSigningStates.Valid ? await script.GetKeyStateAsync(status.SigningKeyFingerprint) : null;
+        if (keyState is null)
+        {
+            return new("not_signed_by_this_panel", "The RustArchon plugin on this server was not signed by this Panel, so it will not be used to update other plugins. Download the plugin from this Panel (Admin, Plugin) and install it on the game server once; updates flow after that.");
+        }
+
+        if (keyState == PluginKeyState.Revoked)
+        {
+            return new("key_revoked", "The key the RustArchon plugin on this server was signed with has been revoked. Download the plugin from this Panel (Admin, Plugin) and install it on the game server by hand.");
+        }
+
+        if (!status.Capabilities.Contains(RustArchonPlugin.ThirdPartyUpdateCapability, StringComparer.Ordinal))
+        {
+            return new("plugin_too_old", "The RustArchon plugin on this server is too old to update other plugins. Update it first.");
+        }
+
+        return null;
+    }
+
     public async Task<Dictionary<string, ThirdPartyUpdateOffer>> GetOffersAsync(RustServer server, DateTimeOffset now)
     {
         var offers = new Dictionary<string, ThirdPartyUpdateOffer>();
@@ -471,6 +502,9 @@ public partial class ThirdPartyPluginUpdateService(
         {
             return offers;
         }
+
+        // The same server-level answer a person's click would get (not the automatic-only gates: those are shown as the server's automatic-update state).
+        var serverRefusal = await CheckServerAsync(server, now, gates, automatic: false);
 
         var notices = await context.PluginUpdateNotices.AcrossAllTenants().AsNoTracking().Where(n => n.RustServerId == server.Id).ToListAsync();
         if (notices.Count == 0)
@@ -481,9 +515,7 @@ public partial class ThirdPartyPluginUpdateService(
         var installed = (await plugins.GetForServerAcrossTenantsAsync(server.TenantId, server.Id) ?? [])
             .GroupBy(p => PluginUpdateNoticeRepository.Normalize(p.Name)).ToDictionary(g => g.Key, g => g.First());
         var status = await statuses.GetForServerAcrossTenantsAsync(server.TenantId, server.Id);
-        var capable = status is not null && now - status.CapturedAtUtc <= StatusFreshFor
-            && status.Capabilities.Contains(RustArchonPlugin.ThirdPartyUpdateCapability, StringComparer.Ordinal);
-        var zipCapable = capable && status!.Capabilities.Contains(RustArchonPlugin.ThirdPartyZipCapability, StringComparer.Ordinal);
+        var zipCapable = serverRefusal is null && status!.Capabilities.Contains(RustArchonPlugin.ThirdPartyZipCapability, StringComparer.Ordinal);
         var latest = (await updates.GetLatestPerPluginAsync(server.Id)).ToDictionary(u => u.NormalizedName);
         var busy = (await updates.GetPendingAsync(server.Id)).Count > 0;
         var excluded = (await exclusions.ListForServerAsync(server.Id)).ToDictionary(e => e.NormalizedName);
@@ -518,7 +550,7 @@ public partial class ThirdPartyPluginUpdateService(
             }
 
             var saved = lookup.ValidationState == PluginFileValidationState.NeedsInstructions ? await mappings.FindAsync(server.Id, notice.NormalizedName) : null;
-            var offer = Describe(lookup, target, shown, last, capable, zipCapable, busy, gates, saved);
+            var offer = Describe(lookup, target, shown, last, serverRefusal, zipCapable, busy, gates, saved);
             if (offer is not null)
             {
                 offers[notice.NormalizedName] = offer;
@@ -529,7 +561,7 @@ public partial class ThirdPartyPluginUpdateService(
     }
 
     private static ThirdPartyUpdateOffer? Describe(
-        PluginDownloadLookup lookup, string target, string shown, ThirdPartyPluginUpdate? last, bool capable, bool zipCapable, bool busy,
+        PluginDownloadLookup lookup, string target, string shown, ThirdPartyPluginUpdate? last, PluginUpdateRefusal? serverRefusal, bool zipCapable, bool busy,
         ThirdPartyUpdateGateResult gates, SavedZipMapping? saved)
     {
         var held = gates.State == ThirdPartyUpdateGateState.HeldForWipe ? gates.HeldUntilUtc : null;
@@ -549,13 +581,13 @@ public partial class ThirdPartyPluginUpdateService(
         }
 
         var isZip = lookup.ValidationState == PluginFileValidationState.NeedsInstructions;
-        var canTry = capable && (!isZip || zipCapable) && !busy;
+        var canTry = serverRefusal is null && (!isZip || zipCapable) && !busy;
 
         // Fail-closed states are silent by design (nothing can be done until the reason clears), but a silent button that simply is not there is not
         // diagnosable - a person looking at the row has to be able to tell WHY, not just that it is not offered right now. Empty when canTry is true:
         // nothing needs explaining.
-        var blocked = canTry ? null : BlockedReason(capable, isZip, zipCapable, busy);
-        string WithBlocked(string message) => blocked is null ? message : Append(message, blocked);
+        var blocked = canTry ? null : BlockedReason(serverRefusal, isZip, zipCapable, busy);
+        string WithBlocked(string message) => blocked is null ? message : Append(message, blocked.Message);
 
         // For a zip: what a person needs to give instructions (its files, and the instructions saved before), and whether the saved ones can be used
         // without asking: they have to have produced a working update before, and still cover every file in this version of the archive.
@@ -578,12 +610,12 @@ public partial class ThirdPartyPluginUpdateService(
 
         if (last is null)
         {
-            return isZip && !trustedAndCovered
-                ? Offer(ThirdPartyUpdateOfferStates.NeedsInstructions, blocked ?? string.Empty, canTry)
-                : Offer(ThirdPartyUpdateOfferStates.Ready, blocked ?? string.Empty, canTry);
+            return (isZip && !trustedAndCovered
+                ? Offer(ThirdPartyUpdateOfferStates.NeedsInstructions, blocked?.Message ?? string.Empty, canTry)
+                : Offer(ThirdPartyUpdateOfferStates.Ready, blocked?.Message ?? string.Empty, canTry)) with { BlockCode = blocked?.Code };
         }
 
-        return last.State switch
+        var result = last.State switch
         {
             ThirdPartyPluginUpdateStates.Started => Offer(ThirdPartyUpdateOfferStates.Applying, string.Empty, false),
             ThirdPartyPluginUpdateStates.Applied => Offer(ThirdPartyUpdateOfferStates.Applied, string.Empty, false),
@@ -598,25 +630,29 @@ public partial class ThirdPartyPluginUpdateService(
             ThirdPartyPluginUpdateStates.Changed => ChangedOffer(Offer, canTry, blocked, shown, last),
             _ => null
         };
+
+        return result is { State: not (ThirdPartyUpdateOfferStates.Applying or ThirdPartyUpdateOfferStates.Applied) } && blocked is not null
+            ? result with { BlockCode = blocked.Code }
+            : result;
     }
 
     /// <summary>Explains, in one short sentence, why a person cannot press Apply on an offer that would otherwise let them - the one thing a missing
     /// button on its own can never say. <c>null</c> means nothing is blocking it (the caller only calls this when something is).</summary>
-    private static string? BlockedReason(bool capable, bool isZip, bool zipCapable, bool busy)
+    private static PluginUpdateRefusal? BlockedReason(PluginUpdateRefusal? serverRefusal, bool isZip, bool zipCapable, bool busy)
     {
         if (busy)
         {
-            return "Another update is in progress on this server; this one waits for it to finish.";
+            return new("in_progress", "Another update is in progress on this server; this one waits for it to finish.");
         }
 
-        if (!capable)
+        if (serverRefusal is not null)
         {
-            return "The RustArchon plugin on this server has not reported recently, or does not report being able to do this.";
+            return serverRefusal;
         }
 
         if (isZip && !zipCapable)
         {
-            return "The RustArchon plugin on this server cannot unpack archives.";
+            return new("zip_unsupported", "The RustArchon plugin on this server cannot unpack archives.");
         }
 
         return null;   // canTry was false for a reason this method does not (yet) know how to name; better silent than wrong.
@@ -628,7 +664,7 @@ public partial class ThirdPartyPluginUpdateService(
     /// <paramref name="blocked"/> already says (busy, stale status, no zip support), which does still withhold Apply, the same as every other
     /// retryable state.
     /// </summary>
-    private static ThirdPartyUpdateOffer ChangedOffer(Func<string, string, bool, ThirdPartyUpdateOffer> offer, bool canTry, string? blocked, string shown, ThirdPartyPluginUpdate last)
+    private static ThirdPartyUpdateOffer ChangedOffer(Func<string, string, bool, ThirdPartyUpdateOffer> offer, bool canTry, PluginUpdateRefusal? blocked, string shown, ThirdPartyPluginUpdate last)
     {
         var sameFileAsBefore = string.Equals(shown, last.FileSha256, StringComparison.OrdinalIgnoreCase);
         var detail = last.Message;
@@ -639,7 +675,7 @@ public partial class ThirdPartyPluginUpdateService(
 
         if (blocked is not null)
         {
-            detail = Append(detail, blocked);
+            detail = Append(detail, blocked.Message);
         }
 
         return offer(ThirdPartyUpdateOfferStates.Changed, detail, canTry);
